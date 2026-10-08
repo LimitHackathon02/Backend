@@ -100,7 +100,7 @@ async def recommend(people: list, count: int, radius_m: int, extra_text: str = "
     locs = [(p["name"], p["preference"]["start_location"]) for p in with_pref
             if p["preference"].get("start_location")]
     if not locs:
-        raise ApiError(400, "NO_LOCATION", "출발 위치를 역 이름으로 적어 주세요.")
+        raise ApiError(400, "NO_LOCATION", "출발 위치를 함께 적어 주세요. 역, 학교, 건물, 동네, 주소 모두 괜찮아요. (예: 코엑스에서 출발)")
     lat = sum(l["lat"] for _, l in locs) / len(locs)
     lng = sum(l["lng"] for _, l in locs) / len(locs)
     try:

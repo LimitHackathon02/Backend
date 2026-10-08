@@ -48,7 +48,10 @@ def _mock_geocode(text: str):
     for key, (lat, lng) in MOCK_LOCATIONS.items():
         if key in text or text in key:
             return {"text": text, "lat": lat, "lng": lng}
-    return None
+    # 등록되지 않은 장소도 MOCK 에서 동작하도록 서울 안의 고정 좌표를 만들어 준다
+    h = hashlib.md5(text.encode()).digest()
+    return {"text": text, "lat": round(37.48 + h[0] / 255 * 0.1, 6),
+            "lng": round(126.93 + h[1] / 255 * 0.15, 6)}
 
 
 def _mock_search(query: str, center: dict) -> list:

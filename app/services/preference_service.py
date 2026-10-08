@@ -36,8 +36,11 @@ def _rule_parse(text: str) -> dict:
                                      ("넓", "넓은"), ("얘기", "대화하기 좋은")] if key in text]
     indoor = "outdoor" if "야외" in text else "indoor" if "실내" in text else "any"
     loc = ""
-    m = re.search(r"([가-힣A-Za-z0-9]+역)", text) or re.search(
-        r"([가-힣A-Za-z0-9]+)에서\s*(출발|가|와|올|갈)", text)
+    # '경희대 국제캠퍼스에서 출발', '코엑스 근처야', '강남역' 순서로 찾는다 (장소 이름은 최대 3단어)
+    place = r"((?:[가-힣A-Za-z0-9]+\s){0,2}[가-힣A-Za-z0-9]+?)"
+    m = (re.search(place + r"\s*에서\s*(출발|가|와|올|갈|만나)", text)
+         or re.search(place + r"\s*(근처|부근|쪽|앞)", text)
+         or re.search(r"([가-힣A-Za-z0-9]+역)", text))
     if m:
         loc = m.group(1)
     return {"likes": list(dict.fromkeys(likes)), "dislikes": list(dict.fromkeys(dislikes)),
