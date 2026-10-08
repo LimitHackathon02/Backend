@@ -72,8 +72,11 @@ async def rank(merged: dict, candidates: list, count: int, extra_text: str) -> l
     return picks[:count]
 
 
-def _travel(name: str, loc: dict, place: dict, route) -> dict:
-    """한 출발지 -> 추천 장소. route 는 naver.driving() 결과(실패하면 None)."""
+def _travel(name: str, loc, place: dict, route) -> dict:
+    """한 출발지 -> 추천 장소. route 는 naver.driving() 결과(실패하면 None). loc 이 없으면 출발지 미입력."""
+    if not loc:
+        return {"member": name, "from": None, "straight_km": None, "driving_km": None,
+                "driving_minutes": None, "text": f"{name}: 출발지 미입력 - 거리·시간을 계산할 수 없어요"}
     km = round(haversine_km(loc["lat"], loc["lng"], place["lat"], place["lng"]), 1)
     origin = f"{loc['text']}({name})"
     if route:
@@ -134,12 +137,18 @@ async def recommend(people: list, count: int, radius_m: int, extra_text: str = "
     # 5) 결과 조립 + 이동 정보 (추천 장소 x 출발지 길찾기는 한꺼번에 병렬 호출)
     by_id = {c["id"]: c for c in filtered}
     places = [by_id[p["id"]] for p in picks]
-    routes = await asyncio.gather(*(naver.driving(loc, place)
-                                    for place in places for _, loc in locs))
+    # 출발지를 안 적은 사람도 결과에서 빠지지 않게 참여자 전원을 넣는다
+    travelers = [(p["name"], (p.get("preference") or {}).get("start_location")) for p in people]
+
+    async def no_route():
+        return None
+
+    routes = await asyncio.gather(*(naver.driving(loc, place) if loc else no_route()
+                                    for place in places for _, loc in travelers))
     recs = []
     for i, (p, place) in enumerate(zip(picks, places), start=1):
-        travel = [_travel(name, loc, place, routes[(i - 1) * len(locs) + j])
-                  for j, (name, loc) in enumerate(locs)]
+        travel = [_travel(name, loc, place, routes[(i - 1) * len(travelers) + j])
+                  for j, (name, loc) in enumerate(travelers)]
         recs.append({"rank": i, "place": place, "score": p["score"], "reason": p["reason"],
                      "travel": travel, "travel_text": [t["text"] for t in travel],
                      "matched": p.get("matched", []), "warnings": p.get("warnings", [])})

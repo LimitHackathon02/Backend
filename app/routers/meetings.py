@@ -26,6 +26,22 @@ def create_meeting(req: Annotated[CreateMeetingReq, Body(openapi_examples=ex.CRE
                                 req.slot_minutes, req.members)
 
 
+@router.post("/demo", status_code=201)
+def seed_demo():
+    """발표 전 한 번 실행: 시연용 데이터로 모임을 초기화한다 (AI 호출 없음).
+    보경은 일정·선호·출발지까지, 지민은 일정만 들어간다. 내용은 app/examples.py 의 DEMO."""
+    demo = ex.DEMO
+    meeting = store.create_meeting(demo["title"], demo["candidate_dates"], demo["time_range"],
+                                   demo["slot_minutes"], list(demo["availability"]))
+    for name, avail in demo["availability"].items():
+        store.get_member(meeting, name)["availability"] = \
+            schedule_service.clean_availability(meeting, avail)
+    for name, pref in demo["preference"].items():
+        store.get_member(meeting, name)["preference"] = dict(pref)
+    store.save()
+    return meeting
+
+
 @router.get("")
 def get_meeting():
     return store.get_meeting()

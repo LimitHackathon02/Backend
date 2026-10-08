@@ -1,81 +1,98 @@
-"""/docs 의 Try it out 에 미리 채워지는 테스트·발표용 예시.
-위에서부터 순서대로 실행하면 모임 생성 -> 일정 -> 선호 -> 추천까지 한 흐름이 된다.
-날짜는 서버 시작일 기준(오늘·내일·모레)이라 모임 생성 예시와 일정 예시가 항상 맞는다."""
+"""발표 시연용 데이터와 /docs 의 Try it out 에 미리 채워지는 예시.
+
+시연 흐름 (2명: 보경 = 미리 입력된 사람, 지민 = 발표 중 직접 입력하는 사람)
+  0) 발표 전  POST /api/meeting/demo              -> DEMO 데이터로 세팅 (보경 전체 + 지민 일정)
+  1) 시연     GET  /api/meeting/schedule          -> 둘 다 되는 시간 확인 (입력 없음)
+  2) 시연     POST /api/meeting/schedule/confirm  -> 확정 (예시 그대로)
+  3) 시연     POST /api/meeting/preference        -> ★ 지민의 선호/비선호 + 출발지를 직접 입력
+  4) 시연     POST /api/meeting/recommend         -> 추천 + 각 출발지에서 거리·자동차 시간
+날짜는 서버 시작일 기준(오늘·내일·모레)이라 발표 당일 서버를 켜면 날짜가 맞는다."""
 from datetime import date, timedelta
 
 D0, D1, D2 = [(date.today() + timedelta(days=i)).isoformat() for i in range(3)]
+
+HOST = "보경"    # 미리 입력된 사람
+GUEST = "지민"   # 발표 중 직접 입력하는 사람
+
+# POST /api/meeting/demo 가 넣는 데이터. 시연 내용을 바꾸려면 여기만 고치면 된다.
+DEMO = {
+    "title": "동아리 뒤풀이",
+    "candidate_dates": [D0, D1, D2],
+    "time_range": {"start": "10:00", "end": "23:00"},
+    "slot_minutes": 60,
+    "availability": {
+        HOST: {D0: ["18:00", "19:00", "20:00"], D1: ["14:00", "15:00", "16:00"]},
+        GUEST: {D0: ["19:00", "20:00", "21:00"], D2: ["12:00", "13:00"]},
+    },
+    # 보경의 선호는 AI 분석이 끝난 상태로 저장해서 시연 시간을 아낀다.
+    "preference": {
+        HOST: {
+            "raw_text": "강남역에서 출발해. 조용히 얘기할 수 있는 카페가 좋고, 술집은 별로야.",
+            "likes": ["카페"],
+            "dislikes": ["술집"],
+            "mood": ["조용한", "대화하기 좋은"],
+            "budget_max": None,
+            "indoor": "any",
+            "start_location": {"text": "강남역", "lat": 37.4979, "lng": 127.0276},
+        },
+    },
+}
 
 
 def _ex(summary: str, value) -> dict:
     return {"summary": summary, "value": value}
 
 
+# ★ 시연 중 직접 입력하는 부분. 첫 번째 예시는 입력이 막힐 때 쓰는 비상용.
+PREFERENCE = {
+    "live": _ex(f"{GUEST}: 사당역 출발, 고기 좋음 / 회 싫음", {
+        "name": GUEST,
+        "text": "사당역에서 출발할게. 고기 먹고 싶고 회는 별로야.",
+    }),
+    "template": _ex(f"{GUEST}: 빈 칸 (직접 입력용)", {
+        "name": GUEST,
+        "text": "",
+    }),
+}
+
+CONFIRM = {
+    "tonight": _ex("오늘 19시~21시로 확정 (둘 다 되는 시간)", {"date": D0, "start": "19:00", "end": "21:00"}),
+}
+
+RECOMMEND = {
+    "default": _ex("3곳 추천, 반경 1km", {"count": 3, "radius_m": 1000, "extra_text": ""}),
+}
+
+# ---- 아래는 시연 흐름 밖에서 따로 테스트할 때 쓰는 예시 ----
 CREATE_MEETING = {
-    "demo": _ex("발표용: 동아리 뒤풀이 (3명, 3일)", {
-        "title": "동아리 뒤풀이",
-        "members": ["보경", "지민", "수아"],
-        "candidate_dates": [D0, D1, D2],
-        "time_range": {"start": "10:00", "end": "23:00"},
-        "slot_minutes": 60,
+    "two": _ex(f"빈 모임 ({HOST}, {GUEST})", {
+        "title": DEMO["title"],
+        "members": [HOST, GUEST],
+        "candidate_dates": DEMO["candidate_dates"],
+        "time_range": DEMO["time_range"],
+        "slot_minutes": DEMO["slot_minutes"],
     }),
     "empty": _ex("기본값으로 초기화 (오늘부터 7일, 참여자 없음)", {}),
 }
 
 JOIN = {
-    "minho": _ex("민호 참여", {"name": "민호"}),
+    "guest": _ex(f"{GUEST} 참여", {"name": GUEST}),
 }
 
 AVAILABILITY = {
-    "bokyung": _ex("보경: 오늘 저녁 + 내일 오후", {
-        "name": "보경",
-        "availability": {D0: ["18:00", "19:00", "20:00", "21:00"], D1: ["14:00", "15:00", "16:00"]},
-    }),
-    "jimin": _ex("지민: 오늘 저녁 늦게", {
-        "name": "지민",
-        "availability": {D0: ["19:00", "20:00", "21:00", "22:00"]},
-    }),
-    "sua": _ex("수아: 오늘 저녁 + 모레 하루 종일", {
-        "name": "수아",
-        "availability": {D0: ["18:00", "19:00", "20:00"],
-                         D2: ["12:00", "13:00", "14:00", "15:00", "16:00", "17:00"]},
-    }),
+    name: _ex(f"{name}: 시연용 일정", {"name": name, "availability": avail})
+    for name, avail in DEMO["availability"].items()
 }
 
 PARSE_AVAILABILITY = {
     "evening": _ex("저녁", {"text": "평일 저녁 7시 이후면 다 괜찮아"}),
-    "weekend": _ex("주말 오후", {"text": "토요일 오후는 되는데 일요일은 안 돼"}),
-}
-
-CONFIRM = {
-    "tonight": _ex("오늘 19시~21시로 확정", {"date": D0, "start": "19:00", "end": "21:00"}),
-}
-
-PREFERENCE = {
-    "bokyung": _ex("보경: 강남역, 조용한 카페", {
-        "name": "보경",
-        "text": "강남역 근처에서 조용히 얘기할 수 있는 카페가 좋아. 너무 비싸지 않았으면.",
-    }),
-    "jimin": _ex("지민: 파스타, 역삼역 출발", {
-        "name": "지민",
-        "text": "역삼역에서 출발해. 파스타나 양식 먹고 싶어.",
-    }),
-    "sua": _ex("수아: 고기, 단체석 (출발 좌표 포함)", {
-        "name": "수아",
-        "text": "고기 먹자! 3명 앉을 수 있는 넓은 자리면 좋겠어.",
-        "start_location": {"text": "신논현역", "lat": 37.5045, "lng": 127.0250},
-    }),
-}
-
-RECOMMEND = {
-    "default": _ex("3곳 추천, 반경 1km", {"count": 3, "radius_m": 1000, "extra_text": ""}),
-    "extra": _ex("추가 조건 포함", {"count": 5, "radius_m": 1500, "extra_text": "주차 가능하고 늦게까지 하는 곳"}),
 }
 
 QUICK = {
     "two": _ex("모임 없이 바로 추천 (2명)", {
         "people": [
-            {"name": "지민", "text": "강남역 근처 조용한 카페"},
-            {"name": "수아", "text": "파스타 먹고 싶어, 강남역에서 출발"},
+            {"name": HOST, "text": "강남역에서 출발, 조용한 카페"},
+            {"name": GUEST, "text": "사당역에서 출발, 고기 먹고 싶어"},
         ],
         "count": 3,
         "radius_m": 1000,
