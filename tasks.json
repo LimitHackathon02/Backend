@@ -1,0 +1,208 @@
+{
+  "summarize": {
+    "description": "긴 글을 요약하고 핵심 항목과 다음 행동을 반환",
+    "prompt": "입력 글을 요약하세요. 제공되지 않은 사실은 만들지 마세요. summary는 3문장 이내, key_points는 5개 이내, next_actions는 3개 이내로 작성하세요.",
+    "temperature": 0,
+    "max_tokens": 1024,
+    "example_input": "팀 회의에서 금요일까지 설문 결과를 모으고 토요일에 발표 자료를 완성하기로 했다. 담당자는 지민이다.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "summary": {"type": "string"},
+        "key_points": {"type": "array", "maxItems": 5, "items": {"type": "string"}},
+        "next_actions": {"type": "array", "maxItems": 3, "items": {"type": "string"}}
+      },
+      "required": ["summary", "key_points", "next_actions"],
+      "additionalProperties": false
+    },
+    "mock_output": {"summary": "[MOCK] 연결 확인용 요약 예시입니다.", "key_points": ["실제 입력을 분석한 결과가 아닙니다."], "next_actions": ["실제 실행은 MOCK_MODE=false로 전환하세요."]}
+  },
+  "classify": {
+    "description": "입력을 지정한 범주로 분류; schema의 enum을 주제에 맞게 수정",
+    "prompt": "입력을 문의, 불만, 제안, 기타 중 하나로 분류하고 이유를 설명하세요. confidence는 통계적으로 보정된 확률이 아닌 모델의 자체 판단 점수입니다.",
+    "temperature": 0,
+    "max_tokens": 512,
+    "example_input": "어제 주문한 물건이 아직 도착하지 않았어요. 배송 상태를 알려주세요.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "category": {"type": "string", "enum": ["문의", "불만", "제안", "기타"]},
+        "reason": {"type": "string"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+      },
+      "required": ["category", "reason", "confidence"],
+      "additionalProperties": false
+    },
+    "mock_output": {"category": "기타", "reason": "[MOCK] 분류 화면 연결 확인용 고정 예시입니다.", "confidence": 0}
+  },
+  "extract": {
+    "description": "비정형 글에서 이름·일정·장소·할 일을 구조화; 필드를 자유롭게 교체",
+    "prompt": "입력과 참고 자료에서 사람 이름, 날짜 표현, 장소, 할 일을 추출하세요. 원문에 없는 정보는 추론하지 마세요. 해당 항목이 없으면 빈 배열을 반환하세요.",
+    "temperature": 0,
+    "max_tokens": 1024,
+    "example_input": "지민과 수아가 10월 9일 오후 2시에 강남역에서 만나 발표를 연습하기로 했다.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "people": {"type": "array", "items": {"type": "string"}},
+        "dates": {"type": "array", "items": {"type": "string"}},
+        "places": {"type": "array", "items": {"type": "string"}},
+        "actions": {"type": "array", "items": {"type": "string"}}
+      },
+      "required": ["people", "dates", "places", "actions"],
+      "additionalProperties": false
+    },
+    "mock_output": {"people": [], "dates": [], "places": [], "actions": ["[MOCK] 정보 추출 연결 확인용 고정 예시"]}
+  },
+  "rewrite": {
+    "description": "글을 쉬운 말·공손한 말·대상 독자에 맞게 변환; context에 스타일 입력",
+    "prompt": "사용자 글의 사실과 의도를 보존하며 context에 지정한 독자와 말투에 맞게 고쳐 쓰세요. 지정이 없으면 쉽고 공손한 한국어로 작성하세요. rewritten과 changes를 반환하세요.",
+    "temperature": 0,
+    "max_tokens": 1024,
+    "example_input": "본 행사의 참가자는 사전 등록 절차를 필히 이행하여야 합니다.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "rewritten": {"type": "string"},
+        "changes": {"type": "array", "items": {"type": "string"}}
+      },
+      "required": ["rewritten", "changes"],
+      "additionalProperties": false
+    },
+    "mock_output": {"rewritten": "[MOCK] 화면 연결 확인용 문장입니다.", "changes": ["실제 입력을 변환하지 않았습니다."]}
+  },
+  "plan": {
+    "description": "조건에 맞는 실행 계획 생성; context에 시간·예산·사용자 제약 입력",
+    "prompt": "입력 목표와 context의 제약을 반영해 5단계 이내의 실천 계획을 작성하세요. 외부 가격, 운영 시간, 제도 등의 사실을 임의로 만들지 마세요. 확인이 필요한 조건은 assumptions에 쓰세요.",
+    "temperature": 0,
+    "max_tokens": 1536,
+    "example_input": "4명이 6시간 안에 해커톤 발표용 시제품을 완성하고 싶다.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "goal": {"type": "string"},
+        "steps": {"type": "array", "maxItems": 5, "items": {"type": "string"}},
+        "assumptions": {"type": "array", "items": {"type": "string"}}
+      },
+      "required": ["goal", "steps", "assumptions"],
+      "additionalProperties": false
+    },
+    "mock_output": {"goal": "[MOCK] 계획 화면 연결 확인", "steps": ["API 요청", "응답 표시"], "assumptions": ["고정 예시이며 실제 계획 생성 결과가 아닙니다."]}
+  },
+  "image_analyze": {
+    "description": "사진에서 관찰한 내용·읽힌 글자·다음 행동·불확실성을 반환",
+    "prompt": "이미지를 관찰해 질문에 답하세요. description은 보이는 사실만 쓰세요. visible_text는 실제 읽힌 글자만 쓰고 불분명한 부분을 만들어내지 마세요. suggestions는 관찰에 근거한 제안, uncertainties는 확인 불가능한 사항입니다.",
+    "temperature": 0,
+    "max_tokens": 1536,
+    "example_input": "이 안내문의 핵심 정보와 내가 해야 할 일을 정리해줘.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "description": {"type": "string"},
+        "visible_text": {"type": "array", "items": {"type": "string"}},
+        "suggestions": {"type": "array", "items": {"type": "string"}},
+        "uncertainties": {"type": "array", "items": {"type": "string"}}
+      },
+      "required": ["description", "visible_text", "suggestions", "uncertainties"],
+      "additionalProperties": false
+    },
+    "mock_output": {"description": "[MOCK] 이미지 업로드 연결 확인용 응답입니다.", "visible_text": [], "suggestions": [], "uncertainties": ["모의 실행에서는 이미지를 분석하지 않습니다."]}
+  },
+  "chat": {
+    "description": "짧은 대화; 이전 대화는 요청 history에 전달",
+    "prompt": "사용자의 질문에 명확하고 간결하게 답하세요. 모르는 내용은 모른다고 말하고 필요한 정보를 요청하세요.",
+    "temperature": 0.3,
+    "max_tokens": 1024,
+    "example_input": "해커톤 발표에서 서비스 가치를 어떻게 설명하면 좋을까?",
+    "schema": null,
+    "mock_output": "[MOCK] 채팅 연결 확인용 고정 응답입니다. 실제 대화는 MOCK_MODE=false로 실행하세요."
+  },
+  "place_query": {
+    "description": "어떤 형식의 장소 조건이든 네이버 지역 검색 계획(검색어 묶음)으로 변환; /api/places가 이 작업을 사용",
+    "prompt": "사용자는 형식 제한 없이 어떤 조건이든 자유롭게 입력합니다. 완전한 문장, 단어 나열, 여러 줄, 오타, 반말, 영어 혼용은 물론 여러 사람의 위치, 일정이나 코스, 모임 인원과 목적 등 무엇이든 가능합니다. 당신의 일은 입력의 뜻을 파악해, 조건에 맞는 장소를 찾으려면 네이버 지역 검색에서 무엇을 검색해야 하는지 검색 계획을 세우는 것입니다. 실제 장소는 서버가 네이버에서 검색해 가져오므로 장소 이름이나 주소는 절대 지어내지 마세요.\nintent에는 입력을 한 문장으로 이해한 내용을 쓰세요.\nsearches에는 서로 다른 관점의 검색 2~4개를 넣으세요. 각 항목은 label(결과 묶음의 제목, 15자 안팎), reason(왜 이 검색이 조건에 맞는지 한 문장), query(네이버 지역 검색에 넣을 '지역명 + 업종(필요하면 분위기나 특징)' 한 구문, 20자 안팎)입니다.\n- query에는 지역과 업종이 함께 들어가야 합니다. 지역만 있거나 업종만 있는 query, 지역과 업종을 따로 나눈 query는 금지입니다. 입력에 나온 지역 표현은 그대로 쓰고 다른 지역으로 바꾸지 마세요. 입력에 지역이 없으면 업종과 특징 위주로 만드세요.\n- 여러 사람이 서로 다른 곳에서 만나면 두 곳 사이에서 만나기 좋은 지역을 직접 판단해 지역별로 검색을 만드세요. reason에 '대략적인 추정'임을 밝히고 정확한 이동 시간을 아는 것처럼 쓰지 마세요.\n- 입력에 사람들이 출발하는 곳(예: 영통역, 강남역)이 나오면 origins에 그 이름을 입력에 나온 그대로 최대 3개 넣으세요. 출발지가 없으면 빈 배열입니다. 서버가 이 이름의 위치를 찾아 후보까지의 거리를 계산합니다.\n- 코스나 여러 목적(예: 식사 후 카페)이 있으면 목적별로 검색을 나누세요.\n- 업종을 말하지 않았으면 상황에 맞게 스스로 고르세요(만남이면 카페, 식사 얘기면 식당 등).\n- 인사나 잡담 등 장소와 상관없는 내용은 무시하세요.\n- 영업시간, 가격, 수용 인원, 룸 유무처럼 검색어만으로 확인할 수 없는 조건은 unmatched_conditions에 적으세요.\n출력 예시 1 (입력: 경희대 국제캠퍼스 근처 조용한 술집):\n{\"intent\":\"경희대 국제캠퍼스 근처에서 조용한 술집을 찾는다.\",\"origins\":[],\"searches\":[{\"label\":\"국제캠퍼스 술집\",\"reason\":\"입력한 지역의 술집입니다.\",\"query\":\"경희대 국제캠퍼스 술집\"},{\"label\":\"조용한 술집\",\"reason\":\"분위기 조건을 검색어에 반영했습니다.\",\"query\":\"경희대 국제캠퍼스 조용한 술집\"}],\"unmatched_conditions\":[]}\n출력 예시 2 (입력: 한 명은 홍대입구역, 한 명은 잠실역이야. 둘이 밥 먹을 곳 추천해줘):\n{\"intent\":\"서로 다른 곳에 있는 두 사람이 중간에서 만나 식사할 곳을 찾는다.\",\"origins\":[\"홍대입구역\",\"잠실역\"],\"searches\":[{\"label\":\"을지로3가\",\"reason\":\"두 역 모두 2호선으로 이동할 수 있는 중간 지점이라는 대략적인 추정입니다.\",\"query\":\"을지로3가 맛집\"},{\"label\":\"건대입구\",\"reason\":\"2호선 이동이 편한 지점이라는 대략적인 추정입니다.\",\"query\":\"건대입구 식당\"}],\"unmatched_conditions\":[]}\n출력 예시 3 (입력: 부모님 생신 저녁, 서초구, 룸 있는 한식당, 12명):\n{\"intent\":\"서초구에서 12명이 모일 수 있는 룸이 있는 한식당을 찾는다.\",\"origins\":[],\"searches\":[{\"label\":\"서초 한정식\",\"reason\":\"단체 모임에 흔한 한식 업종입니다.\",\"query\":\"서초구 한정식\"},{\"label\":\"서초 룸 한식당\",\"reason\":\"룸 조건을 검색어에 반영했습니다.\",\"query\":\"서초구 룸 한식당\"}],\"unmatched_conditions\":[\"12명 수용 가능 여부\",\"룸 보유 여부\"]}\n위 예시처럼 JSON 객체 하나만 출력하고 설명이나 다른 글자는 붙이지 마세요.",
+    "temperature": 0,
+    "max_tokens": 900,
+    "example_input": "한명은 영통역, 한명은 강남역에 있어. 두 사람이 만날 장소를 추천해줘",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "intent": {
+          "type": "string"
+        },
+        "origins": {
+          "type": "array"
+        },
+        "searches": {
+          "type": "array",
+          "minItems": 1
+        },
+        "unmatched_conditions": {
+          "type": "array"
+        }
+      },
+      "required": [
+        "searches"
+      ],
+      "additionalProperties": true
+    },
+    "mock_output": {
+      "intent": "[MOCK] 연결 확인용 고정 예시입니다.",
+      "searches": [
+        {
+          "label": "[MOCK] 예시 검색 1",
+          "reason": "[MOCK] 예시 설명입니다.",
+          "query": "[MOCK] 예시 지역 카페"
+        },
+        {
+          "label": "[MOCK] 예시 검색 2",
+          "reason": "[MOCK] 예시 설명입니다.",
+          "query": "[MOCK] 예시 지역 식당"
+        }
+      ],
+      "unmatched_conditions": [
+        "[MOCK] 연결 확인용 고정 예시입니다."
+      ],
+      "origins": [
+        "[MOCK] 출발지 A",
+        "[MOCK] 출발지 B"
+      ]
+    }
+  },
+  "place_pick": {
+    "description": "검색 결과 후보 중에서 요청에 가장 맞는 장소를 번호로 고르고 이유를 설명; /api/places가 두 번째 단계로 사용",
+    "prompt": "사용자의 요청과 후보 장소 목록(candidates)이 주어집니다. 후보는 네이버 지역 검색 결과이며 반드시 이 목록에서만 고를 수 있습니다. 장소 이름이나 주소는 쓰지 말고 후보의 id만 돌려주세요.\npicks에는 요청에 가장 잘 맞는 후보를 최대 5개, 잘 맞는 순서대로 넣으세요. 각 항목은 id(정수), reason(한 문장), fits(후보 정보에서 근거를 확인할 수 있는 충족 조건 목록), unknown(후보 정보만으로는 확인할 수 없어 방문 전에 확인해야 하는 조건 목록)입니다.\n- 근거는 후보의 name, category, address, search(어떤 검색에서 나왔는지)에서만 찾으세요. 영업시간, 가격, 메뉴, 평점, 분위기, 소음, 좌석, 룸 유무처럼 후보 정보에 없는 사실은 사실처럼 쓰지 말고 unknown에 넣으세요.\n- 후보에 straight_km_from(출발지별 직선거리 km)이 있으면 서버가 계산한 값이므로 사실로 쓸 수 있습니다. 여러 출발지가 있으면 거리 차이가 작은 곳을 우선하고 reason에 숫자를 인용하세요. 직선거리는 실제 이동 시간이 아니라는 점을 이해하세요.\n- 요청의 unmatched_conditions도 확인할 수 없으면 unknown에 반영하세요.\n- 요청에 맞는 후보가 없으면 picks를 빈 배열로 두세요.\nsummary에는 전체 추천을 두세 문장으로 요약하세요. 후보에 없는 장소를 언급하지 마세요.\n출력 예시:\n{\"picks\":[{\"id\":3,\"reason\":\"요청한 지역의 카페로 검색되었습니다.\",\"fits\":[\"영통 지역\",\"카페\"],\"unknown\":[\"조용한 분위기\",\"밤 10시까지 영업\"]}],\"summary\":\"영통 지역 카페 중 한 곳을 골랐습니다. 분위기와 영업시간은 방문 전에 확인하세요.\"}\n위 예시처럼 JSON 객체 하나만 출력하고 설명이나 다른 글자는 붙이지 마세요.",
+    "temperature": 0,
+    "max_tokens": 800,
+    "example_input": "{\"request\":\"영통에서 조용한 카페\",\"intent\":\"영통 카페\",\"unmatched_conditions\":[],\"candidates\":[{\"id\":0,\"name\":\"예시 카페\",\"category\":\"음식점>카페\",\"address\":\"경기도 수원시 영통구\",\"search\":\"영통 카페\"}]}",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "picks": {
+          "type": "array"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "picks"
+      ],
+      "additionalProperties": true
+    },
+    "mock_output": {
+      "picks": [
+        {
+          "id": 0,
+          "reason": "[MOCK] 예시 추천 이유입니다.",
+          "fits": [
+            "[MOCK] 예시 충족 조건"
+          ],
+          "unknown": [
+            "[MOCK] 예시 확인 필요 조건"
+          ]
+        }
+      ],
+      "summary": "[MOCK] 연결 확인용 고정 예시입니다."
+    }
+  }
+}

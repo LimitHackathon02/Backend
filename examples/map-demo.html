@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>장소 찾기 데모</title>
+<style>
+  :root { --bg:#f6f7f4; --card:#fff; --ink:#1c2b24; --muted:#5f6f67; --line:#dde3dc; --green:#157a54; --blue:#2f6fd0; --warn:#9a5b00; --warnbg:#fff4dc; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#141a17; --card:#1d2622; --ink:#e8efea; --muted:#9db0a5; --line:#2f3b35; --green:#47c08f; --blue:#7aa7f0; --warn:#f0c36b; --warnbg:#3a3017; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font-family:system-ui,'Apple SD Gothic Neo','Noto Sans KR',sans-serif; line-height:1.55; }
+  header { padding:14px 16px; border-bottom:1px solid var(--line); font-weight:700; }
+  main { display:grid; grid-template-columns:minmax(320px,440px) 1fr; gap:0; height:calc(100vh - 53px); }
+  .side { overflow:auto; padding:16px; border-right:1px solid var(--line); }
+  .mapwrap { position:relative; min-height:320px; height:calc(100vh - 53px); }
+  #map { position:absolute; left:0; top:0; width:100%; height:100%; min-height:320px; }
+  .nomap { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; padding:24px; text-align:center; color:var(--muted); }
+  textarea { width:100%; min-height:84px; padding:10px; border:1px solid var(--line); border-radius:10px; background:var(--card); color:var(--ink); font:inherit; resize:vertical; }
+  .opts { display:flex; flex-wrap:wrap; gap:12px; margin:8px 0; font-size:14px; color:var(--muted); }
+  .row { display:flex; gap:8px; align-items:center; }
+  button { font:inherit; cursor:pointer; }
+  .go { background:var(--green); color:#fff; border:0; border-radius:10px; padding:10px 18px; font-weight:700; }
+  .go:disabled { opacity:.5; cursor:default; }
+  input[type=password] { flex:1; min-width:0; padding:8px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--ink); }
+  .status { margin:10px 0; font-size:14px; color:var(--muted); }
+  .error { color:#c0392b; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px; margin:10px 0; cursor:pointer; }
+  .card.active { border-color:var(--green); box-shadow:0 0 0 2px color-mix(in srgb, var(--green) 25%, transparent); }
+  .card h3 { margin:0 0 2px; font-size:16px; }
+  .meta { font-size:13px; color:var(--muted); }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+  .chip { font-size:12px; padding:2px 8px; border-radius:20px; border:1px solid var(--line); }
+  .chip.unknown { background:var(--warnbg); color:var(--warn); border-color:transparent; }
+  .chip.fit { color:var(--green); }
+  .note { font-size:13px; background:var(--warnbg); color:var(--warn); border-radius:10px; padding:8px 10px; margin:10px 0; }
+  .travel { font-size:13px; margin-top:6px; }
+  a { color:var(--blue); }
+  details { margin:8px 0; }
+  summary { cursor:pointer; font-weight:600; }
+  ul.plain { list-style:none; padding:0; margin:6px 0; }
+  ul.plain li { padding:6px 0; border-top:1px solid var(--line); font-size:14px; cursor:pointer; }
+  h2 { font-size:15px; margin:18px 0 4px; }
+  @media (max-width: 760px) { main { grid-template-columns:1fr; height:auto; } .side { border-right:0; } .mapwrap { height:55vh; min-height:320px; } }
+</style>
+</head>
+<body>
+<header>장소 찾기 데모 <span class="meta">[v5]</span> <span class="meta">· 조건을 자유롭게 쓰면 AI가 검색 계획을 세우고 네이버 검색 결과에서 고릅니다</span></header>
+<main>
+  <section class="side">
+    <textarea id="query">한명은 영통역, 한명은 강남역에 있어. 두 사람이 만날 장소를 추천해줘</textarea>
+    <div class="opts">
+      <label><input type="checkbox" id="pick" checked> AI가 추천 고르기</label>
+      <label><input type="checkbox" id="directions" checked> 자동차 이동 시간(지도 키가 있을 때)</label>
+    </div>
+    <div class="row"><input type="password" id="teamkey" placeholder="X-Team-Key (설정한 경우만)" autocomplete="off"><button class="go" id="go">찾기</button></div>
+    <div class="status" id="status" role="status"></div>
+    <div id="results"></div>
+  </section>
+  <section class="mapwrap">
+    <div id="map"></div>
+    <div id="fallback" style="position:absolute;inset:0;display:none;background:var(--card);z-index:2"></div>
+    <div class="nomap" id="nomap" style="z-index:3">지도를 불러오는 중…</div>
+    <div id="dbg" style="position:absolute;left:6px;bottom:6px;z-index:5;font:11px/1.4 monospace;background:#000a;color:#fff;padding:4px 6px;border-radius:6px;max-width:90%"></div>
+  </section>
+</main>
+
+<script>
+// 같은 서버(/demo)에서 열면 주소를 비워 두면 됩니다. 다른 주소의 서버를 쓰려면 ?api=http://localhost:8000 를 붙이세요.
+const API = new URLSearchParams(location.search).get('api') || '';
+const $ = id => document.getElementById(id);
+let map = null, infoWindow = null, markers = [], cards = [];
+
+// 모든 서버 문자열은 textContent로만 넣어 HTML로 해석되지 않게 합니다.
+function h(tag, props, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (k === 'class') el.className = v; else if (k === 'text') el.textContent = v; else el.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) if (kid != null) el.append(kid);
+  return el;
+}
+const safeLink = url => (typeof url === 'string' && url.startsWith('https://map.naver.com/')) ? url : null;
+const hasCoords = p => p && typeof p.lat === 'number' && typeof p.lng === 'number';
+
+let noTiles = false;
+const dbgState = {};
+function dbg(k, v) { dbgState[k] = v; $('dbg').textContent = Object.entries(dbgState).map(([a, b]) => a + ':' + b).join(' | '); }
+function drawFallback() {
+  // 타일이 안 뜰 때도 위치 관계를 볼 수 있도록 마커를 단순 도형으로 그립니다(배경 지도 없음).
+  const box = $('fallback');
+  if (!noTiles) { box.style.display = 'none'; return; }
+  const pts = markers.filter(m => typeof m.lat === 'number');
+  box.textContent = ''; box.style.display = 'block';
+  if (!pts.length) { box.append(h('div', { style: 'padding:24px;color:var(--muted)', text: '표시할 좌표가 아직 없습니다.' })); return; }
+  const W = box.clientWidth || 600, H = box.clientHeight || 400, pad = 50;
+  const k = Math.cos(37.5 * Math.PI / 180);
+  const xs = pts.map(m => m.lng * k), ys = pts.map(m => m.lat);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const sc = Math.min((W - 2 * pad) / ((x1 - x0) || 1e-6), (H - 2 * pad) / ((y1 - y0) || 1e-6));
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg'); svg.setAttribute('width', W); svg.setAttribute('height', H);
+  pts.forEach((m, i) => {
+    const cx = pad + ((m.lng * k - x0) * sc) + (W - 2 * pad - (x1 - x0) * sc) / 2, cy = H - pad - ((m.lat - y0) * sc) - (H - 2 * pad - (y1 - y0) * sc) / 2;
+    const c = document.createElementNS(NS, 'circle'); c.setAttribute('cx', cx); c.setAttribute('cy', cy); c.setAttribute('r', 13);
+    c.setAttribute('fill', { rec: '#157a54', origin: '#2f6fd0', other: '#8a948e' }[m.cls] || '#888'); svg.append(c);
+    const t = document.createElementNS(NS, 'text'); t.setAttribute('x', cx); t.setAttribute('y', cy + 4); t.setAttribute('text-anchor', 'middle'); t.setAttribute('fill', '#fff'); t.setAttribute('font-size', 11); t.textContent = m.label; svg.append(t);
+    const n = document.createElementNS(NS, 'text'); n.setAttribute('x', cx); n.setAttribute('y', cy - 18); n.setAttribute('text-anchor', 'middle'); n.setAttribute('font-size', 12); n.setAttribute('fill', 'currentColor'); n.textContent = (m.name || '').slice(0, 14); svg.append(n);
+  });
+  box.append(svg, h('div', { style: 'position:absolute;top:6px;left:8px;font-size:12px;color:var(--muted)', text: '배경 지도 없이 위치만 표시(타일 로드 실패). 북쪽이 위쪽입니다.' }));
+}
+function showNoMap(text) { $('nomap').textContent = text; $('nomap').style.display = 'flex'; }
+
+async function initMap() {
+  try {
+    const cfg = await (await fetch(API + '/api/map-config')).json();
+    if (!cfg.configured || !cfg.client_id) { showNoMap('지도 키(NCP_MAPS_CLIENT_ID/SECRET)가 설정되지 않아 목록만 표시합니다.'); return; }
+    window.navermap_authFailure = () => { dbg('auth', 'FAILED'); map = null; infoWindow = null; markers = []; showNoMap('지도 인증에 실패했습니다. Application의 Web 서비스 URL에 http://localhost 를 등록했는지 확인하세요.'); };
+    await new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=' + encodeURIComponent(cfg.client_id);
+      s.onload = resolve; s.onerror = reject; document.head.append(s);
+    });
+    dbg('script', 'ok');
+    map = new naver.maps.Map('map', { center: new naver.maps.LatLng(37.5665, 126.9780), zoom: 11 });
+    infoWindow = new naver.maps.InfoWindow({ content: '' });
+    $('nomap').style.display = 'none';
+    // 지도 객체는 만들어졌는데 타일이 안 뜨는 경우(Dynamic Map 미선택, 네트워크 차단 등)를 화면에 알립니다.
+    let tiles = false;
+    try { map.autoResize(); } catch (e) {}
+    dbg('map', 'created ' + $('map').clientWidth + 'x' + $('map').clientHeight);
+    naver.maps.Event.addListener(map, 'tilesloaded', () => { tiles = true; noTiles = false; drawFallback(); dbg('tiles', 'loaded'); $('nomap').style.display = 'none'; });
+    setTimeout(() => {
+      if (!tiles && map) {
+        noTiles = true; dbg('tiles', 'NOT loaded'); drawFallback();
+        showNoMap('지도 타일이 표시되지 않았습니다. 1) Application 설정에서 Dynamic Map을 선택했는지, 2) 브라우저 F12 > Network에서 oapi.map.naver.com / naveropenapi 요청이 막혔는지(광고 차단 등) 확인하세요. 마커는 정상적으로 만들어졌을 수 있습니다.');
+        $('nomap').style.pointerEvents = 'none'; $('nomap').style.background = 'rgba(255,255,255,.85)'; $('nomap').style.alignItems = 'flex-start';
+      }
+    }, 6000);
+    window.addEventListener('resize', () => { try { if (map) map.autoResize(); } catch (e) {} });
+  } catch (e) {
+    dbg('error', String(e && e.message || e).slice(0, 80)); map = null; showNoMap('지도를 불러오지 못해 목록만 표시합니다.');
+  }
+}
+
+function pin(label, cls) {
+  // label은 숫자/고정 문자만 받습니다.
+  return { content: '<div style="min-width:26px;height:26px;padding:0 6px;border-radius:' + (cls === 'origin' ? '6px' : '50%') +
+    ';background:' + ({ rec: '#157a54', origin: '#2f6fd0', other: '#8a948e' }[cls]) + ';color:#fff;font:700 12px/26px system-ui;text-align:center;border:2px solid #fff;box-shadow:0 1px 4px #0006">' + label + '</div>',
+    anchor: new naver.maps.Point(13, 13) };
+}
+
+function addMarker(p, label, cls, body, index) {
+  if (!map || !hasCoords(p)) return;
+  try {
+    const pos = new naver.maps.LatLng(p.lat, p.lng);
+    const marker = new naver.maps.Marker({ position: pos, map, title: p.name, icon: pin(label, cls) });
+    naver.maps.Event.addListener(marker, 'click', () => { openInfo(marker, body); if (index != null) highlight(index, false); });
+    markers.push({ marker, pos, body, label, cls, name: p.name, lat: p.lat, lng: p.lng });
+    return markers.length - 1;
+  } catch (e) { mapFailed(e); }
+}
+function openInfo(marker, body) {
+  if (!map || !infoWindow) return;
+  try { infoWindow.setContent(h('div', { style: 'padding:10px 12px;max-width:260px;font:13px/1.5 system-ui;color:#1c2b24' }, body)); infoWindow.open(map, marker); } catch (e) { mapFailed(e); }
+}
+// 지도 라이브러리 오류(인증 실패 등)가 나도 목록은 계속 보여 줍니다.
+function mapFailed(e) { console.warn('지도 오류', e); map = null; infoWindow = null; showNoMap('지도를 사용할 수 없어 목록만 표시합니다. (Web 서비스 URL과 키를 확인하세요)'); }
+function highlight(i, pan) {
+  cards.forEach((c, k) => c.classList.toggle('active', k === i));
+  if (pan && cards[i] && cards[i].dataset.m !== undefined) {
+    const m = markers[+cards[i].dataset.m];
+    if (m && map) { try { map.setCenter(m.pos); map.setZoom(15); } catch (e) { mapFailed(e); } openInfo(m.marker, m.body); }
+  }
+  if (cards[i]) cards[i].scrollIntoView({ block: 'nearest' });
+}
+
+function travelText(t) {
+  const parts = [t.origin + ' 직선 ' + t.straight_km + 'km'];
+  if (t.driving_min != null) parts.push('자동차 약 ' + t.driving_min + '분(' + t.driving_km + 'km)');
+  return parts.join(' · ');
+}
+function infoBody(p, extra) {
+  const a = safeLink(p.map_link);
+  return [h('strong', { text: p.name }), h('div', { text: p.category }), h('div', { text: p.road_address || p.address }),
+    extra ? h('div', { text: extra }) : null, a ? h('a', { href: a, target: '_blank', rel: 'noopener', text: '네이버 지도에서 보기' }) : null];
+}
+
+function render(data) {
+  const out = $('results'); out.replaceChildren(); cards = [];
+  try { markers.forEach(m => m.marker.setMap(null)); if (infoWindow) infoWindow.close(); } catch (e) { mapFailed(e); }
+  markers = [];
+  let bounds = null;
+  try { bounds = map ? new naver.maps.LatLngBounds() : null; } catch (e) { mapFailed(e); }
+  const extend = p => { try { if (map && bounds && hasCoords(p)) bounds.extend(new naver.maps.LatLng(p.lat, p.lng)); } catch (e) { mapFailed(e); } };
+
+  if (data.summary) out.append(h('p', { text: data.summary }));
+  if (data.pick_error) out.append(h('div', { class: 'note', text: 'AI 추천 단계에 실패해 검색 결과만 표시합니다. (' + data.pick_error + ')' }));
+  const un = (data.output && data.output.unmatched_conditions) || [];
+  if (un.length) out.append(h('div', { class: 'note', text: '검색으로 확인할 수 없는 조건: ' + un.join(', ') }));
+
+  (data.origins || []).forEach(o => { addMarker(o, '출', 'origin', infoBody(o, '출발지'), null); extend(o); });
+  if ((data.origins || []).length) out.append(h('p', { class: 'meta', text: '출발지: ' + data.origins.map(o => o.name).join(', ') }));
+
+  const recs = data.recommendations || [];
+  if (recs.length) out.append(h('h2', { text: 'AI 추천' }));
+  recs.forEach((r, i) => {
+    const travel = r.travel || [];
+    const gap = r.travel_gap ? '이동 차이 ' + r.travel_gap.value + r.travel_gap.unit + (r.travel_gap.basis === 'straight_km' ? '(직선거리 기준)' : '(자동차 기준)') : '';
+    const a = safeLink(r.map_link);
+    const card = h('div', { class: 'card' },
+      h('h3', { text: r.rank + '. ' + r.name }),
+      h('div', { class: 'meta', text: [r.category, r.road_address || r.address].filter(Boolean).join(' · ') }),
+      r.reason ? h('div', { text: r.reason }) : null,
+      travel.length ? h('div', { class: 'travel' }, travel.map(t => h('div', { text: travelText(t) })), gap ? h('div', { text: gap }) : null) : null,
+      h('div', { class: 'chips' },
+        (r.fits || []).map(f => h('span', { class: 'chip fit', text: '✓ ' + f })),
+        (r.unknown || []).map(u => h('span', { class: 'chip unknown', text: '확인 필요: ' + u }))),
+      a ? h('div', { class: 'meta' }, h('a', { href: a, target: '_blank', rel: 'noopener', text: '네이버 지도에서 보기' })) : null);
+    const mi = addMarker(r, String(r.rank), 'rec', infoBody(r, r.reason), cards.length);
+    if (mi !== undefined) card.dataset.m = mi;
+    extend(r);
+    const idx = cards.length; cards.push(card);
+    card.addEventListener('click', e => { if (e.target.tagName !== 'A') highlight(idx, true); });
+    out.append(card);
+  });
+
+  const shown = new Set();
+  const recKeys = new Set(recs.map(r => r.name + '|' + (r.road_address || r.address)));
+  (data.groups || []).forEach(g => {
+    const det = h('details', recs.length ? {} : { open: '' },
+      h('summary', { text: (g.label || g.query) + ' (' + (g.places || []).length + ')' }),
+      g.reason ? h('div', { class: 'meta', text: g.reason }) : null,
+      h('ul', { class: 'plain' }, (g.places || []).map(p => {
+        const a = safeLink(p.map_link);
+        const li = h('li', {}, h('strong', { text: p.name }), ' ', h('span', { class: 'meta', text: p.road_address || p.address }), ' ',
+          a ? h('a', { href: a, target: '_blank', rel: 'noopener', text: '지도' }) : null);
+        const key = p.name + '|' + (p.road_address || p.address);
+        if (!recKeys.has(key) && !shown.has(key)) {
+          shown.add(key);
+          const mi = addMarker(p, '·', 'other', infoBody(p, null), null);
+          if (mi !== undefined) li.addEventListener('click', () => { if (map && markers[mi]) { try { map.setCenter(markers[mi].pos); map.setZoom(15); } catch (e) { mapFailed(e); } openInfo(markers[mi].marker, markers[mi].body); } });
+          extend(p);
+        }
+        return li;
+      })));
+    out.append(det);
+  });
+
+  dbg('markers', markers.length); drawFallback();
+  if (map && bounds && markers.length) { try { map.fitBounds(bounds, { top: 40, right: 40, bottom: 40, left: 40 }); } catch (e) { mapFailed(e); } }
+  else if (map && !markers.length && (data.places || []).length) $('status').textContent += ' (좌표가 없어 지도에는 표시하지 못했습니다)';
+  const u = data.usage_total != null ? data.usage_total : (data.usage && data.usage.total_tokens);
+  if (u != null) out.append(h('p', { class: 'meta', text: '사용 토큰: ' + u + (data.directions_used ? ' · 자동차 이동 시간 조회 사용' : '') }));
+}
+
+async function search() {
+  const query = $('query').value.trim();
+  if (!query) return;
+  $('go').disabled = true; $('status').className = 'status'; $('status').textContent = '찾는 중… (AI 호출이 두 번 있어 10~30초 걸릴 수 있어요)';
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if ($('teamkey').value) headers['X-Team-Key'] = $('teamkey').value;
+    const res = await fetch(API + '/api/places', { method: 'POST', headers,
+      body: JSON.stringify({ query, pick: $('pick').checked, directions: $('directions').checked }) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '오류 ' + res.status);
+    $('status').textContent = data.place_source === 'mock' ? '모의 실행 결과입니다(고정 예시).' : '';
+    render(data);
+  } catch (e) {
+    $('status').className = 'status error'; $('status').textContent = e.message || '요청에 실패했습니다.';
+  } finally { $('go').disabled = false; }
+}
+$('go').addEventListener('click', search);
+$('query').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) search(); });
+initMap();
+</script>
+</body>
+</html>
