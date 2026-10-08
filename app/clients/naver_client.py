@@ -14,7 +14,7 @@ import httpx
 from app.config import settings
 from app.errors import ApiError
 
-SEARCH_URL = "https://openapi.naver.com/v1/search/local.json"
+SEARCH_URL = "https://naverapihub.apigw.ntruss.com/search/v1/local"
 
 
 def haversine_km(lat1, lng1, lat2, lng2) -> float:
@@ -97,8 +97,9 @@ def _to_place(item: dict) -> dict:
 
 async def local_search(query: str, display: int = 5, sort: str = "random") -> list:
     """네이버 지역 검색. display 는 최대 5개. sort: random(정확도순) / comment(리뷰 많은 순)."""
-    headers = {"X-Naver-Client-Id": settings.NAVER_CLIENT_ID,
-               "X-Naver-Client-Secret": settings.NAVER_CLIENT_SECRET}
+    headers = {"X-NCP-APIGW-API-KEY-ID": settings.NAVER_CLIENT_ID,
+           "X-NCP-APIGW-API-KEY": settings.NAVER_CLIENT_SECRET}
+
     params = {"query": query, "display": display, "start": 1, "sort": sort}
     try:
         async with httpx.AsyncClient(timeout=10) as client:

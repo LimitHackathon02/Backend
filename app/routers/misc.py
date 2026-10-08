@@ -1,6 +1,9 @@
 """모임 없이 쓰는 빠른 추천, 토큰 사용량, 헬스체크."""
-from fastapi import APIRouter
+from typing import Annotated
 
+from fastapi import APIRouter, Body
+
+from app import examples as ex
 from app.clients.hcx_client import USAGE
 from app.config import settings
 from app.schemas import QuickReq
@@ -20,7 +23,7 @@ def usage():
 
 
 @router.post("/api/recommend/quick")
-async def quick_recommend(req: QuickReq):
+async def quick_recommend(req: Annotated[QuickReq, Body(openapi_examples=ex.QUICK)]):
     people = []
     for p in req.people:
         pref, _ = await preference_service.build_preference(p.text)

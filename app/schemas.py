@@ -1,5 +1,5 @@
 """요청 JSON의 모양. 여기서 틀리면 FastAPI가 자동으로 400 VALIDATION_ERROR 를 돌려준다."""
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
@@ -23,10 +23,15 @@ class TimeRange(BaseModel):
     _v_end = field_validator("end")(_check_time)
 
 
+def default_dates() -> list[str]:
+    """오늘부터 7일."""
+    return [(date.today() + timedelta(days=i)).isoformat() for i in range(7)]
+
+
 class CreateMeetingReq(BaseModel):
-    title: str = Field(min_length=1, max_length=40)
-    host_name: str = Field(min_length=1, max_length=20)
-    candidate_dates: list[str] = Field(min_length=1, max_length=14)
+    title: str = Field(default="우리 모임", min_length=1, max_length=40)
+    members: list[str] = Field(default=[], max_length=10)
+    candidate_dates: list[str] = Field(default_factory=default_dates, min_length=1, max_length=14)
     time_range: TimeRange = TimeRange()
     slot_minutes: Literal[30, 60] = 60
 
@@ -41,6 +46,7 @@ class JoinReq(BaseModel):
 
 
 class AvailabilityReq(BaseModel):
+    name: str = Field(min_length=1, max_length=20)
     availability: dict[str, list[str]]
 
 
@@ -55,12 +61,12 @@ class Location(BaseModel):
 
 
 class PreferenceReq(BaseModel):
+    name: str = Field(min_length=1, max_length=20)
     text: str = Field(min_length=1, max_length=500)
     start_location: Optional[Location] = None
 
 
 class ConfirmReq(BaseModel):
-    member_id: str
     date: str
     start: str
     end: str
