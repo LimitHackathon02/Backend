@@ -1,4 +1,5 @@
 """3-1: 중간지점 -> 후보 검색 -> AI 랭킹 -> 이동 정보."""
+import asyncio
 import json
 
 from app import prompts
@@ -71,6 +72,20 @@ async def rank(merged: dict, candidates: list, count: int, extra_text: str) -> l
     return picks[:count]
 
 
+def _travel(name: str, loc: dict, place: dict, route) -> dict:
+    """한 출발지 -> 추천 장소. route 는 naver.driving() 결과(실패하면 None)."""
+    km = round(haversine_km(loc["lat"], loc["lng"], place["lat"], place["lng"]), 1)
+    origin = f"{loc['text']}({name})"
+    if route:
+        text = f"{origin}에서 직선 {km}km · 도로 {route['distance_km']}km - 자동차 약 {route['minutes']}분"
+    else:
+        text = f"{origin}에서 직선 {km}km - 자동차 경로 없음"
+    return {"member": name, "from": loc["text"], "straight_km": km,
+            "driving_km": route["distance_km"] if route else None,
+            "driving_minutes": route["minutes"] if route else None,
+            "text": text}
+
+
 async def recommend(people: list, count: int, radius_m: int, extra_text: str = "") -> dict:
     """people: [{"name": "보경", "preference": {...}}, ...]"""
     with_pref = [p for p in people if p.get("preference")]
@@ -116,19 +131,18 @@ async def recommend(people: list, count: int, radius_m: int, extra_text: str = "
     except ApiError:
         picks, fallback = _rule_rank(merged, filtered, count), True
 
-    # 5) 결과 조립 + 이동 정보
+    # 5) 결과 조립 + 이동 정보 (추천 장소 x 출발지 길찾기는 한꺼번에 병렬 호출)
     by_id = {c["id"]: c for c in filtered}
+    places = [by_id[p["id"]] for p in picks]
+    routes = await asyncio.gather(*(naver.driving(loc, place)
+                                    for place in places for _, loc in locs))
     recs = []
-    for i, p in enumerate(picks, start=1):
-        place = by_id[p["id"]]
-        travel = []
-        for name, loc in locs:
-            km = haversine_km(loc["lat"], loc["lng"], place["lat"], place["lng"])
-            travel.append({"member": name, "distance_km": round(km, 1),
-                           "est_minutes": round(km / 20 * 60 + 10)})
+    for i, (p, place) in enumerate(zip(picks, places), start=1):
+        travel = [_travel(name, loc, place, routes[(i - 1) * len(locs) + j])
+                  for j, (name, loc) in enumerate(locs)]
         recs.append({"rank": i, "place": place, "score": p["score"], "reason": p["reason"],
-                     "matched": p.get("matched", []), "warnings": p.get("warnings", []),
-                     "travel": travel})
+                     "travel": travel, "travel_text": [t["text"] for t in travel],
+                     "matched": p.get("matched", []), "warnings": p.get("warnings", [])})
 
     return {
         "center": center,

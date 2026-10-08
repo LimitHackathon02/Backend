@@ -159,6 +159,28 @@ async def area_name(lat: float, lng: float):
     return " ".join(p for p in parts if p) or None
 
 
+async def driving(start: dict, goal: dict):
+    """자동차 길찾기 (NCP Directions 5). {"distance_km","minutes"} / 실패하면 None.
+    MOCK_MODE 에서는 직선거리 x1.3 을 도로 거리로, 시속 25km 로 계산한 값."""
+    if settings.MOCK_MODE:
+        km = haversine_km(start["lat"], start["lng"], goal["lat"], goal["lng"]) * 1.3
+        return {"distance_km": round(km, 1), "minutes": max(1, round(km / 25 * 60))}
+    try:
+        data = await _ncp_get("/map-direction/v1/driving", {
+            "start": f"{start['lng']},{start['lat']}",
+            "goal": f"{goal['lng']},{goal['lat']}",
+            "option": "trafast",
+        })
+    except ApiError:
+        return None
+    routes = data.get("route", {}).get("trafast") or []
+    if data.get("code") != 0 or not routes:   # 출발지와 도착지가 너무 가까우면 경로가 없음(code 1)
+        return None
+    summary = routes[0]["summary"]
+    return {"distance_km": round(summary["distance"] / 1000, 1),
+            "minutes": max(1, round(summary["duration"] / 60000))}
+
+
 async def nearest_station(lat: float, lng: float):
     """중간 좌표 근처 지하철역. {"name","search_name","lat","lng"} / 못 찾으면 None."""
     if settings.MOCK_MODE:
