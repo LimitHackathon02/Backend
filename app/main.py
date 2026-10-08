@@ -1,48 +1,33 @@
-from pathlib import Path
-
-from fastapi import Depends, FastAPI, Header, HTTPException
+"""서버 시작점. 실행: uvicorn app.main:app --reload"""
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
-from app.settings import get_settings
+from app.config import settings
+from app.routers import meetings, misc
 
-settings = get_settings()
-Path(settings.database_path).parent.mkdir(parents=True, exist_ok=True)
+app = FastAPI(title="Backend/new", version="1.0")
 
-
-def require_team_key(x_team_key: str | None = Header(default=None)):
-    if settings.team_key and x_team_key != settings.team_key:
-        raise HTTPException(status_code=401, detail="X-Team-Key가 올바르지 않습니다.")
-
-
-app = FastAPI(
-    title="Backend",
-    docs_url="/docs" if settings.is_dev else None,
-    redoc_url=None,
-    dependencies=[Depends(require_team_key)],
-)
-
+# 프론트(다른 포트/도메인)에서 호출할 수 있게 허용
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=list(settings.cors_origins),
-    allow_credentials=True,
+    allow_origins=settings.CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-@app.get("/")
-def root():
-    return {"message": "Backend is running"}
+# 입력 형식 오류(422)를 명세서의 400 VALIDATION_ERROR 모양으로 바꿈
+@app.exception_handler(RequestValidationError)
+async def validation_handler(request: Request, exc: RequestValidationError):
+    first = exc.errors()[0] if exc.errors() else {}
+    where = ".".join(str(x) for x in first.get("loc", []) if x != "body")
+    return JSONResponse(status_code=400, content={"detail": {
+        "code": "VALIDATION_ERROR",
+        "message": f"입력값을 다시 확인해 주세요 ({where}: {first.get('msg', '')})",
+    }})
 
 
-@app.get("/health")
-def health():
-    # 키 값은 노출하지 않고 설정 여부만 반환
-    return {
-        "status": "ok",
-        "env": settings.app_env,
-        "mock": settings.mock,
-        "clova_api_key_configured": bool(settings.clova_api_key),
-        "naver_search_configured": bool(settings.naver_client_id and settings.naver_client_secret),
-        "maps_configured": bool(settings.maps_client_id and settings.maps_client_secret),
-    }
+app.include_router(meetings.router)
+app.include_router(misc.router)

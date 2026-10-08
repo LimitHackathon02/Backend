@@ -7,5 +7,5 @@ def test_health():
     res = TestClient(app).get("/health")
     assert res.status_code == 200
     body = res.json()
-    assert body["status"] == "ok"
-    assert "clova_api_key_configured" in body
+    assert body["ok"] is True
+    assert "mock" in body
