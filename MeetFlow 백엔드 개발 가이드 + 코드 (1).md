@@ -4,7 +4,7 @@ Oct 8, 2026 · @박보경
 
 ## 1. 전체 그림
 
-이 문서의 코드를 위에서부터 파일 이름 그대로 복사해 붙이면, `MOCK_MODE=1`에서 키 없이 API 명세서의 모든 API가 돌아갑니다. 그다음 `.env`에 키 두 개만 넣으면 실제 HCX와 카카오로 바뀝니다.
+이 문서의 코드를 위에서부터 파일 이름 그대로 복사해 붙이면, `MOCK_MODE=1`에서 키 없이 API 명세서의 모든 API가 돌아갑니다. 그다음 `.env`에 키만 넣으면 실제 HCX와 네이버 API로 바뀝니다.
 
 폴더 구조 (이대로 만들기)
 
@@ -23,8 +23,8 @@ meetflow-backend/
 │   ├── prompts.py        ← HCX 프롬프트 + JSON 스키마 (당일 가장 많이 고칠 파일)
 │   ├── clients/
 │   │   ├── __init__.py
-│   │   ├── hcx_client.py    ← CLOVA Studio 호출
-│   │   └── kakao_client.py  ← 카카오 로컬 검색
+│   │   ├── hcx_client.py    ← CLOVA Studio(HyperCLOVA X) 호출
+│   │   └── naver_client.py  ← 네이버 지역 검색 + NCP Maps 지오코딩
 │   ├── services/
 │   │   ├── __init__.py
 │   │   ├── schedule_service.py   ← 겹치는 시간 계산 (AI 없음)
@@ -38,13 +38,13 @@ meetflow-backend/
     └── smoke_test.py     ← 실제 키가 동작하는지 1분 점검
 ```
 
-요청 하나가 지나가는 길은 항상 같습니다: 프론트 → `routers`(주소 받기, 입력 검사) → `services`(실제 로직) → `clients`(HCX·카카오 호출) → `store`(저장) → 다시 프론트. 버그가 나면 이 순서대로 거꾸로 따라가면 됩니다.
+요청 하나가 지나가는 길은 항상 같습니다: 프론트 → `routers`(주소 받기, 입력 검사) → `services`(실제 로직) → `clients`(HCX·네이버 API 호출) → `store`(저장) → 다시 프론트. 버그가 나면 이 순서대로 거꾸로 따라가면 됩니다.
 
-역할 나누기 추천: 1명은 `schedule_service` + 일정 라우터(AI 없음, 입문자에게 적합), 1명은 `prompts.py` 튜닝 + `preference_service`, 1명은 `recommend_service` + 카카오, 나머지는 프론트.
+역할 나누기 추천: 1명은 `schedule_service` + 일정 라우터(AI 없음, 입문자에게 적합), 1명은 `prompts.py` 튜닝 + `preference_service`, 1명은 `recommend_service` + 네이버 API, 나머지는 프론트.
 
 ## 2. 0단계: 환경 설정 (20분)
 
-Python 3.10 이상과 키 두 개(CLOVA Studio, 카카오 REST)만 있으면 됩니다. 키가 없어도 MOCK 모드로 먼저 개발을 시작하세요.
+Python 3.10 이상과 키 세 종류(CLOVA Studio, 네이버 개발자센터 검색 API, 네이버 클라우드 Maps)만 있으면 됩니다. 키가 없어도 MOCK 모드로 먼저 개발을 시작하세요.
 
 1. 폴더 만들고 가상환경 켜기 (Windows PowerShell 기준)
 
@@ -61,9 +61,10 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-3. 키 발급
-   1. CLOVA Studio: 콘솔 → API 키 → 테스트 앱 키(또는 서비스 앱 키) 발급 → `nv-`로 시작하는 값 복사
-   2. 카카오: developers.kakao.com → 내 애플리케이션 → 앱 추가 → 앱 키의 **REST API 키** 복사 → 제품 설정에서 "카카오맵" 사용 설정 ON
+3. 키 발급 (서로 다른 사이트 세 곳)
+   1. CLOVA Studio (HyperCLOVA X): 네이버 클라우드 콘솔 → CLOVA Studio → API 키 → 테스트 앱 키 발급 → `nv-`로 시작하는 값을 `CLOVA_API_KEY`에
+   2. 네이버 검색 API (가게·역 찾기): developers.naver.com → Application → 애플리케이션 등록 → 사용 API에서 **검색** 선택 → 비로그인 오픈 API 환경 "WEB 설정"에 `http://localhost` 입력 → Client ID / Client Secret을 `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET`에
+   3. NCP Maps (주소 ↔ 좌표): 네이버 클라우드 콘솔 → Services → Application Services → Maps → Application 등록 → **Geocoding, Reverse Geocoding** 체크 (프론트 지도도 쓰면 Dynamic Map 체크 + 웹 서비스 URL에 `http://localhost:5500`) → 인증 정보의 Client ID / Client Secret을 `NCP_MAPS_KEY_ID`, `NCP_MAPS_KEY`에
 4. `.env` 파일 만들기 (`.env.example`을 복사해서 값 채우기)
 
 ```bash
@@ -99,7 +100,7 @@ AI 없는 부분을 먼저 완성하고, AI는 MOCK → 실제 순서로 하나�
 - [ ] 1\. 폴더·가상환경·설치, `MOCK_MODE=1`로 서버 켜고 `/health` 확인 (30분)
 - [ ] 2\. 모임 생성·조회·참여 API 확인, 프론트에 연결 (1시간)
 - [ ] 3\. 가능 시간 저장 + 겹치는 시간 계산 확인, 1-2 화면 히트맵 연결 (1.5시간)
-- [ ] 4\. `scripts/smoke_test.py`로 HCX·카카오 실제 키 동작 확인 (20분)
+- [ ] 4\. `scripts/smoke_test.py`로 HCX·네이버 실제 키 동작 확인 (20분)
 - [ ] 5\. `MOCK_MODE=0`, 선호 입력 API 실제 HCX로 확인, 프롬프트 다듬기 (1.5시간)
 - [ ] 6\. 그룹 추천 API 실제 호출, 결과 카드 화면 연결 (2시간)
 - [ ] 7\. quick 추천 + `/api/usage` 연결 (30분)
@@ -124,7 +125,7 @@ python-dotenv>=1.0
 `.env.example`
 
 ```
-# 1이면 HCX·카카오를 호출하지 않고 샘플 응답 사용 (크레딧 0원)
+# 1이면 HCX·네이버를 호출하지 않고 샘플 응답 사용 (크레딧 0원)
 MOCK_MODE=1
 
 # CLOVA Studio API 키 (nv-로 시작)
@@ -133,8 +134,14 @@ CLOVA_BASE_URL=https://clovastudio.stream.ntruss.com
 HCX_MODEL=HCX-007
 HCX_LIGHT_MODEL=HCX-DASH-002
 
-# 카카오 REST API 키
-KAKAO_REST_KEY=
+# 네이버 개발자센터 (검색 API - 지역)
+NAVER_CLIENT_ID=
+NAVER_CLIENT_SECRET=
+
+# 네이버 클라우드 플랫폼 Maps (Geocoding, Reverse Geocoding)
+NCP_MAPS_KEY_ID=
+NCP_MAPS_KEY=
+NCP_MAPS_BASE=https://maps.apigw.ntruss.com
 
 DATA_PATH=data/meetings.json
 CORS_ORIGINS=*
@@ -157,7 +164,11 @@ class Settings:
     CLOVA_BASE_URL: str = os.getenv("CLOVA_BASE_URL", "https://clovastudio.stream.ntruss.com")
     HCX_MODEL: str = os.getenv("HCX_MODEL", "HCX-007")
     HCX_LIGHT_MODEL: str = os.getenv("HCX_LIGHT_MODEL", "HCX-DASH-002")
-    KAKAO_REST_KEY: str = os.getenv("KAKAO_REST_KEY", "")
+    NAVER_CLIENT_ID: str = os.getenv("NAVER_CLIENT_ID", "")
+    NAVER_CLIENT_SECRET: str = os.getenv("NAVER_CLIENT_SECRET", "")
+    NCP_MAPS_KEY_ID: str = os.getenv("NCP_MAPS_KEY_ID", "")
+    NCP_MAPS_KEY: str = os.getenv("NCP_MAPS_KEY", "")
+    NCP_MAPS_BASE: str = os.getenv("NCP_MAPS_BASE", "https://maps.apigw.ntruss.com")
     DATA_PATH: str = os.getenv("DATA_PATH", "data/meetings.json")
     CORS_ORIGINS: list = os.getenv("CORS_ORIGINS", "*").split(",")
 
@@ -350,7 +361,7 @@ class QuickReq(BaseModel):
     extra_text: str = Field(default="", max_length=200)
 ```
 
-## 6. 코드 2: 프롬프트 · HCX · 카카오 클라이언트
+## 6. 코드 2: 프롬프트 · HCX · 네이버 클라이언트
 
 HCX 결과가 이상하면 `prompts.py`만 고치세요. 클라이언트 두 파일은 "API 한 번 부르고 결과를 꺼내는" 일만 합니다. 사전 개발 코드(`hcx-message-coach`)의 `hcx_client.py`가 이미 smoke test를 통과했다면, 아래 `chat`/`structured` 두 함수 이름만 맞춰 그 파일을 써도 됩니다.
 
@@ -410,12 +421,12 @@ AVAILABILITY_SCHEMA = {
     "required": ["days", "note"],
 }
 
-# ③ 검색어 생성: 그룹 조건 -> 카카오 검색어
-QUERY_SYSTEM = """너는 카카오맵 검색어를 만드는 담당이다.
-그룹의 조건을 보고 실제 가게를 찾기 좋은 짧은 검색어 2~3개를 만든다.
+# ③ 검색어 생성: 그룹 조건 -> 네이버 지도 검색어
+QUERY_SYSTEM = """너는 네이버 지도 검색어를 만드는 담당이다.
+그룹의 조건을 보고 실제 가게를 찾기 좋은 짧은 검색어 3~4개를 만든다.
 - 검색어는 '파스타', '이탈리안 레스토랑', '조용한 카페'처럼 2~10자 정도의 명사구.
 - 싫어하는 것(dislikes)이 들어간 검색어는 만들지 않는다.
-- 지역 이름은 넣지 않는다 (위치는 따로 지정됨)."""
+- 지역 이름은 넣지 않는다 (역 이름은 코드가 앞에 붙임)."""
 
 QUERY_SCHEMA = {
     "type": "object",
@@ -556,19 +567,36 @@ async def structured(system: str, user: str, schema: dict, step: str,
     return _parse_json(content)
 ````
 
-`app/clients/kakao_client.py`
+`app/clients/naver_client.py` (네이버 지역 검색은 반경 검색이 없어서 "사당역 파스타"처럼 역 이름을 붙여 찾고, 거리는 코드로 걸러냅니다)
 
 ```python
-"""카카오 로컬 API 담당: 장소 이름 -> 좌표, 근처 지하철역, 근처 가게 검색.
-MOCK_MODE 에서는 아래 샘플 데이터로 흉내낸다."""
+"""네이버 API 담당.
+- 지역 검색 (네이버 개발자센터 검색 API): 역·가게 이름 -> 좌표, 근처 가게 후보
+- 지오코딩 / 리버스 지오코딩 (NCP Maps): 주소 -> 좌표, 좌표 -> 동네 이름
+네이버 지역 검색은 '반경 검색'이 없어서 "사당역 파스타"처럼 역 이름을 붙여 검색하고,
+거리는 코드로 계산해 너무 먼 곳을 걸러낸다. MOCK_MODE 에서는 샘플 데이터로 흉내낸다."""
 import hashlib
+import html
+import math
+import re
+from urllib.parse import quote
 
 import httpx
 
 from app.config import settings
 from app.errors import ApiError
 
-BASE = "https://dapi.kakao.com/v2/local"
+SEARCH_URL = "https://openapi.naver.com/v1/search/local.json"
+
+
+def haversine_km(lat1, lng1, lat2, lng2) -> float:
+    """두 좌표 사이 직선거리(km)."""
+    r = 6371
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = p2 - p1, math.radians(lng2 - lng1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(a))
+
 
 # ---------- MOCK 데이터 ----------
 MOCK_LOCATIONS = {
@@ -578,19 +606,14 @@ MOCK_LOCATIONS = {
     "판교역": (37.3948, 127.1112), "경희대": (37.2420, 127.0800), "수원": (37.2636, 127.0286),
 }
 MOCK_PLACES = [
-    ("오스테리아 모모", "음식점 > 양식 > 이탈리안"), ("파스타 공방", "음식점 > 양식 > 이탈리안"),
-    ("피자 앤 그릴", "음식점 > 양식 > 피자"), ("고기굽는 집", "음식점 > 한식 > 육류,고기"),
-    ("삼겹살 상회", "음식점 > 한식 > 육류,고기"), ("바다회센터", "음식점 > 일식 > 회"),
-    ("스시 하루", "음식점 > 일식 > 초밥,롤"), ("조용한 서재 카페", "음식점 > 카페"),
-    ("브런치 테이블", "음식점 > 양식 > 브런치"), ("보드게임 아지트", "가정,생활 > 여가시설 > 보드카페"),
-    ("밤 술집 이자카야", "음식점 > 술집 > 일본식주점"), ("마라 한그릇", "음식점 > 중식 > 마라탕"),
-    ("방탈출 미스터리룸", "가정,생활 > 여가시설 > 방탈출카페"), ("한옥 한정식", "음식점 > 한식 > 한정식"),
+    ("오스테리아 모모", "양식>이탈리아음식"), ("파스타 공방", "양식>이탈리아음식"),
+    ("피자 앤 그릴", "양식>피자"), ("고기굽는 집", "한식>육류,고기요리"),
+    ("삼겹살 상회", "한식>육류,고기요리"), ("바다회센터", "일식>회"),
+    ("스시 하루", "일식>초밥,롤"), ("조용한 서재 카페", "카페,디저트>카페"),
+    ("브런치 테이블", "양식>브런치"), ("보드게임 아지트", "여가시설>보드카페"),
+    ("밤 술집 이자카야", "술집>이자카야"), ("마라 한그릇", "중식>마라탕"),
+    ("방탈출 미스터리룸", "여가시설>방탈출카페"), ("한옥 한정식", "한식>한정식"),
 ]
-
-
-def _offset(seed: str, scale: float = 0.008) -> tuple:
-    h = hashlib.md5(seed.encode()).digest()
-    return ((h[0] / 255 - 0.5) * scale, (h[1] / 255 - 0.5) * scale)
 
 
 def _mock_geocode(text: str):
@@ -600,85 +623,143 @@ def _mock_geocode(text: str):
     return None
 
 
-def _mock_search(query: str, lat: float, lng: float, size: int) -> list:
-    words = [w for w in query.replace(",", " ").split() if w]
-    hits = [p for p in MOCK_PLACES if any(w in p[0] or w in p[1] for w in words)]
-    if not hits:
-        hits = MOCK_PLACES
+def _mock_search(query: str, center: dict) -> list:
+    words = [w for w in query.split() if w and w != center.get("search_name")]
+    hits = [p for p in MOCK_PLACES if any(w in p[0] or w in p[1] for w in words)] or MOCK_PLACES
     places = []
-    for i, (name, cat) in enumerate(hits[:size]):
-        dlat, dlng = _offset(name)
+    for name, cat in hits[:5]:
+        h = hashlib.md5(name.encode()).digest()
+        lat = round(center["lat"] + (h[0] / 255 - 0.5) * 0.008, 6)
+        lng = round(center["lng"] + (h[1] / 255 - 0.5) * 0.008, 6)
         places.append({
-            "id": str(10000000 + MOCK_PLACES.index((name, cat))), "name": name, "category": cat,
-            "address": "서울 어딘가 샘플로 12", "lat": round(lat + dlat, 6), "lng": round(lng + dlng, 6),
-            "phone": "02-000-0000", "url": "http://place.map.kakao.com/0",
-            "distance_m": 100 + i * 120,
+            "id": hashlib.md5(name.encode()).hexdigest()[:10], "name": name, "category": cat,
+            "address": "서울 어딘가 샘플로 12", "lat": lat, "lng": lng, "phone": "",
+            "url": f"https://map.naver.com/p/search/{quote(name)}",
+            "distance_m": round(haversine_km(center["lat"], center["lng"], lat, lng) * 1000),
         })
     return places
 
 
-# ---------- 실제 호출 ----------
-async def _get(path: str, params: dict) -> list:
-    headers = {"Authorization": f"KakaoAK {settings.KAKAO_REST_KEY}"}
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            res = await client.get(f"{BASE}{path}", headers=headers, params=params)
-    except httpx.HTTPError as e:
-        raise ApiError(502, "MAP_ERROR", f"지도 정보를 불러오지 못했어요: {e}")
-    if res.status_code != 200:
-        print(f"[KAKAO ERROR] {path} {res.status_code} {res.text[:300]}")
-        raise ApiError(502, "MAP_ERROR", "지도 정보를 불러오지 못했어요.")
-    return res.json().get("documents", [])
+# ---------- 네이버 검색 API (지역) ----------
+def _clean(text: str) -> str:
+    """검색 결과 제목의 <b>태그, &amp; 같은 것 제거."""
+    return html.unescape(re.sub(r"<[^>]+>", "", text or ""))
 
 
-def _to_place(d: dict) -> dict:
+def _coord(value) -> float:
+    """mapx/mapy 는 WGS84 좌표 x 10,000,000 정수 문자열. 예: '1269816000' -> 126.9816"""
+    return int(float(value)) / 10_000_000
+
+
+def _to_place(item: dict) -> dict:
+    name = _clean(item.get("title", ""))
+    address = item.get("roadAddress") or item.get("address", "")
     return {
-        "id": d["id"],
-        "name": d["place_name"],
-        "category": d.get("category_name", ""),
-        "address": d.get("road_address_name") or d.get("address_name", ""),
-        "lat": float(d["y"]),
-        "lng": float(d["x"]),
-        "phone": d.get("phone", ""),
-        "url": d.get("place_url", ""),
-        "distance_m": int(d["distance"]) if d.get("distance") else None,
+        "id": hashlib.md5((name + address).encode()).hexdigest()[:10],  # 네이버 지역검색은 id가 없어서 만듦
+        "name": name,
+        "category": item.get("category", ""),
+        "address": address,
+        "lat": _coord(item["mapy"]),
+        "lng": _coord(item["mapx"]),
+        "phone": item.get("telephone", ""),
+        "url": item.get("link") or f"https://map.naver.com/p/search/{quote(name)}",
+        "distance_m": None,
     }
 
 
+async def local_search(query: str, display: int = 5, sort: str = "random") -> list:
+    """네이버 지역 검색. display 는 최대 5개. sort: random(정확도순) / comment(리뷰 많은 순)."""
+    headers = {"X-Naver-Client-Id": settings.NAVER_CLIENT_ID,
+               "X-Naver-Client-Secret": settings.NAVER_CLIENT_SECRET}
+    params = {"query": query, "display": display, "start": 1, "sort": sort}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.get(SEARCH_URL, headers=headers, params=params)
+    except httpx.HTTPError as e:
+        raise ApiError(502, "MAP_ERROR", f"지도 정보를 불러오지 못했어요: {e}")
+    if res.status_code != 200:
+        print(f"[NAVER SEARCH ERROR] {res.status_code} {res.text[:300]}")
+        raise ApiError(502, "MAP_ERROR", "지도 정보를 불러오지 못했어요.")
+    return [_to_place(it) for it in res.json().get("items", []) if it.get("mapx")]
+
+
+# ---------- NCP Maps (Geocoding / Reverse Geocoding) ----------
+async def _ncp_get(path: str, params: dict) -> dict:
+    headers = {"x-ncp-apigw-api-key-id": settings.NCP_MAPS_KEY_ID,
+               "x-ncp-apigw-api-key": settings.NCP_MAPS_KEY}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.get(settings.NCP_MAPS_BASE + path, headers=headers, params=params)
+    except httpx.HTTPError as e:
+        raise ApiError(502, "MAP_ERROR", f"지도 정보를 불러오지 못했어요: {e}")
+    if res.status_code != 200:
+        print(f"[NCP MAPS ERROR] {path} {res.status_code} {res.text[:300]}")
+        raise ApiError(502, "MAP_ERROR", "지도 정보를 불러오지 못했어요.")
+    return res.json()
+
+
 async def geocode(text: str):
-    """'수원역' -> {"text","lat","lng"}. 못 찾으면 None."""
+    """'수원역' 또는 '경기 수원시 팔달구 덕영대로 924' -> {"text","lat","lng"}. 못 찾으면 None."""
     if not text:
         return None
     if settings.MOCK_MODE:
         return _mock_geocode(text)
-    docs = await _get("/search/keyword.json", {"query": text, "size": 1})
-    if not docs:
+    # 1) 역·건물 이름은 지역 검색이 잘 찾음
+    places = await local_search(text, display=1)
+    if places:
+        return {"text": text, "lat": places[0]["lat"], "lng": places[0]["lng"]}
+    # 2) 주소 형태면 NCP 지오코딩
+    data = await _ncp_get("/map-geocode/v2/geocode", {"query": text})
+    addrs = data.get("addresses", [])
+    if not addrs:
         return None
-    return {"text": text, "lat": float(docs[0]["y"]), "lng": float(docs[0]["x"])}
+    return {"text": text, "lat": float(addrs[0]["y"]), "lng": float(addrs[0]["x"])}
 
 
-async def nearest_station(lat: float, lng: float, radius: int = 2000):
-    """좌표 근처 가장 가까운 지하철역. 없으면 None."""
+async def area_name(lat: float, lng: float):
+    """좌표 -> '동작구 사당동' (리버스 지오코딩). 못 찾으면 None."""
     if settings.MOCK_MODE:
-        return {"name": "샘플 중간역", "lat": lat, "lng": lng}
-    docs = await _get("/search/category.json", {
-        "category_group_code": "SW8", "x": lng, "y": lat,
-        "radius": radius, "sort": "distance", "size": 1,
-    })
-    if not docs:
+        return "샘플구 샘플동"
+    data = await _ncp_get("/map-reversegeocode/v2/gc",
+                          {"coords": f"{lng},{lat}", "orders": "legalcode", "output": "json"})
+    results = data.get("results", [])
+    if not results:
         return None
-    return {"name": docs[0]["place_name"], "lat": float(docs[0]["y"]), "lng": float(docs[0]["x"])}
+    region = results[0]["region"]
+    parts = [region.get(k, {}).get("name", "") for k in ("area2", "area3")]
+    return " ".join(p for p in parts if p) or None
 
 
-async def search_places(query: str, lat: float, lng: float, radius: int, size: int = 15) -> list:
-    """좌표 반경 안에서 키워드로 가게 검색."""
+async def nearest_station(lat: float, lng: float):
+    """중간 좌표 근처 지하철역. {"name","search_name","lat","lng"} / 못 찾으면 None."""
     if settings.MOCK_MODE:
-        return _mock_search(query, lat, lng, size)
-    docs = await _get("/search/keyword.json", {
-        "query": query, "x": lng, "y": lat, "radius": radius,
-        "size": size, "sort": "accuracy",
-    })
-    return [_to_place(d) for d in docs]
+        return {"name": "샘플역", "search_name": "샘플역", "lat": lat, "lng": lng}
+    try:
+        area = await area_name(lat, lng)
+    except ApiError:
+        area = None
+    if not area:
+        return None
+    dong = area.split()[-1]                                   # '사당동'
+    items = await local_search(f"{dong} 지하철역", display=5)
+    stations = [p for p in items if "지하철" in p["category"] or p["name"].endswith("역")]
+    if not stations:   # 역을 못 찾으면 동네 이름으로 검색
+        return {"name": area, "search_name": dong, "lat": lat, "lng": lng}
+    best = min(stations, key=lambda p: haversine_km(lat, lng, p["lat"], p["lng"]))
+    m = re.match(r"(.+?역)", best["name"])                    # '사당역 4호선' -> '사당역'
+    return {"name": best["name"], "search_name": m.group(1) if m else best["name"],
+            "lat": best["lat"], "lng": best["lng"]}
+
+
+async def search_places(query: str, center: dict, radius_m: int) -> list:
+    """'{역이름} {검색어}' 로 검색하고, 중간지점에서 radius_m 안의 가게만 돌려준다."""
+    full_query = f"{center['search_name']} {query}"
+    if settings.MOCK_MODE:
+        return _mock_search(full_query, center)
+    places = await local_search(full_query, display=5)
+    for p in places:
+        p["distance_m"] = round(haversine_km(center["lat"], center["lng"], p["lat"], p["lng"]) * 1000)
+    return [p for p in places if p["distance_m"] <= radius_m]
 ```
 
 ## 7. 코드 3: 서비스 (일정 · 선호 · 추천)
@@ -831,7 +912,7 @@ from collections import Counter
 
 from app import prompts
 from app.clients import hcx_client as hcx
-from app.clients import kakao_client as kakao
+from app.clients import naver_client as naver
 from app.config import settings
 from app.errors import ApiError
 
@@ -898,7 +979,7 @@ async def build_preference(text: str, start_location: dict = None) -> tuple:
     loc = start_location
     if not loc and parsed["start_location_text"]:
         try:
-            loc = await kakao.geocode(parsed["start_location_text"])
+            loc = await naver.geocode(parsed["start_location_text"])
         except ApiError:
             loc = None
     pref = {
@@ -958,11 +1039,11 @@ async def group_summary(merged: dict) -> str:
 ```python
 """3-1: 중간지점 -> 후보 검색 -> AI 랭킹 -> 이동 정보."""
 import json
-import math
 
 from app import prompts
 from app.clients import hcx_client as hcx
-from app.clients import kakao_client as kakao
+from app.clients import naver_client as naver
+from app.clients.naver_client import haversine_km
 from app.config import settings
 from app.errors import ApiError
 from app.services.preference_service import group_summary, merge_group
@@ -970,16 +1051,8 @@ from app.services.preference_service import group_summary, merge_group
 MAX_CANDIDATES = 20
 
 
-def haversine_km(lat1, lng1, lat2, lng2) -> float:
-    r = 6371
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    dp, dl = p2 - p1, math.radians(lng2 - lng1)
-    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
-    return 2 * r * math.asin(math.sqrt(a))
-
-
 def _rule_queries(merged: dict) -> list:
-    words = [x["word"] for x in merged["likes"]][:3]
+    words = [x["word"] for x in merged["likes"]][:4]
     return words or ["맛집"]
 
 
@@ -990,7 +1063,7 @@ async def make_queries(merged: dict, extra_text: str) -> list:
     try:
         out = await hcx.structured(prompts.QUERY_SYSTEM, user, prompts.QUERY_SCHEMA,
                                    step="make_queries", temperature=0.3)
-        queries = [q.strip() for q in out.get("queries", []) if q and q.strip()][:3]
+        queries = [q.strip() for q in out.get("queries", []) if q and q.strip()][:4]
         return queries or _rule_queries(merged)
     except ApiError:
         return _rule_queries(merged)
@@ -1006,7 +1079,7 @@ def _rule_rank(merged: dict, candidates: list, count: int) -> list:
         score = min(100, 50 + 15 * len(matched) + max(0, 20 - dist // 50))
         scored.append({"id": c["id"], "score": score, "matched": matched,
                        "reason": "그룹이 원한 조건과 가깝고 중간지점에서 가까운 곳이에요.",
-                       "warnings": ["가격·분위기는 카카오맵에서 확인해 주세요"]})
+                       "warnings": ["가격·분위기는 네이버 지도에서 확인해 주세요"]})
     scored.sort(key=lambda x: -x["score"])
     return scored[:count]
 
@@ -1051,14 +1124,21 @@ async def recommend(people: list, count: int, radius_m: int, extra_text: str = "
         raise ApiError(400, "NO_LOCATION", "출발 위치를 역 이름으로 적어 주세요.")
     lat = sum(l["lat"] for _, l in locs) / len(locs)
     lng = sum(l["lng"] for _, l in locs) / len(locs)
-    station = await kakao.nearest_station(lat, lng)
-    center = station or {"name": "중간지점", "lat": lat, "lng": lng}
+    try:
+        station = await naver.nearest_station(lat, lng)
+    except ApiError:
+        station = None
+    if not station:  # 역을 못 찾으면 중간에 가장 가까운 사람의 출발지를 기준으로
+        _, near = min(locs, key=lambda x: haversine_km(lat, lng, x[1]["lat"], x[1]["lng"]))
+        station = {"name": near["text"], "search_name": near["text"],
+                   "lat": near["lat"], "lng": near["lng"]}
+    center = station
 
     # 2) 검색어 -> 후보 수집
     queries = await make_queries(merged, extra_text)
     candidates = {}
     for q in queries:
-        for place in await kakao.search_places(q, center["lat"], center["lng"], radius_m):
+        for place in await naver.search_places(q, center, radius_m):
             if len(candidates) < MAX_CANDIDATES:
                 candidates.setdefault(place["id"], place)
 
@@ -1295,7 +1375,7 @@ app.include_router(misc.router)
 
 ```python
 """실제 키가 동작하는지 1분 점검. 실행: python -m scripts.smoke_test
-MOCK_MODE 와 상관없이 실제 HCX·카카오를 1번씩 호출한다 (크레딧 아주 조금 사용)."""
+MOCK_MODE 와 상관없이 실제 HCX·네이버를 1번씩 호출한다 (크레딧 아주 조금 사용)."""
 import asyncio
 import traceback
 
@@ -1304,7 +1384,7 @@ from app.config import settings
 settings.MOCK_MODE = False  # 강제로 실제 호출
 
 from app.clients import hcx_client as hcx  # noqa: E402
-from app.clients import kakao_client as kakao  # noqa: E402
+from app.clients import naver_client as naver  # noqa: E402
 
 
 async def check(name, coro):
@@ -1318,15 +1398,17 @@ async def check(name, coro):
 
 async def main():
     print("CLOVA 키:", "있음" if settings.CLOVA_API_KEY else "없음",
-          "/ 카카오 키:", "있음" if settings.KAKAO_REST_KEY else "없음")
+          "/ 네이버 검색 키:", "있음" if settings.NAVER_CLIENT_ID else "없음",
+          "/ NCP Maps 키:", "있음" if settings.NCP_MAPS_KEY_ID else "없음")
     await check("HCX chat (가벼운 모델)", hcx.chat("한 단어로만 답해.", "안녕?", step="smoke"))
     await check("HCX structured (HCX-007)", hcx.structured(
         "사용자 문장에서 음식 이름만 뽑아라.", "파스타랑 피자 먹고 싶어",
         {"type": "object", "properties": {"foods": {"type": "array", "items": {"type": "string"}}},
          "required": ["foods"]}, step="smoke"))
-    await check("카카오 geocode", kakao.geocode("강남역"))
-    await check("카카오 지하철역", kakao.nearest_station(37.4979, 127.0276))
-    await check("카카오 가게 검색", kakao.search_places("파스타", 37.4979, 127.0276, 1000, size=3))
+    await check("네이버 지역검색", naver.local_search("강남역 파스타", display=3))
+    await check("NCP 지오코딩", naver._ncp_get("/map-geocode/v2/geocode", {"query": "불정로 6"}))
+    await check("NCP 리버스 지오코딩", naver.area_name(37.4765, 126.9816))
+    await check("중간지점 지하철역", naver.nearest_station(37.4765, 126.9816))
     print("토큰 사용:", hcx.USAGE)
 
 
@@ -1336,7 +1418,7 @@ if __name__ == "__main__":
 
 ## 9. 실행과 테스트
 
-위 코드는 MOCK 모드에서 전체 흐름(모임 생성 → 참여 3명 → 가능 시간 → 겹치는 시간 → 확정 → 선호 입력 → 그룹 추천 → quick 추천 → 에러 응답)을 미리 돌려 확인했습니다. 실제 HCX·카카오 경로도 가짜 응답으로 확인했지만, 진짜 키로는 행사장에서 smoke test를 꼭 먼저 돌리세요.
+위 코드는 MOCK 모드에서 전체 흐름(모임 생성 → 참여 3명 → 가능 시간 → 겹치는 시간 → 확정 → 선호 입력 → 그룹 추천 → quick 추천 → 에러 응답)을 미리 돌려 확인했습니다. 실제 HCX·네이버 API 경로도 가짜 응답으로 확인했지만, 진짜 키로는 행사장에서 smoke test를 꼭 먼저 돌리세요.
 
 서버 켜기 (반드시 `meetflow-backend` 폴더에서)
 
@@ -1352,7 +1434,7 @@ uvicorn app.main:app --reload --port 8000
 python -m scripts.smoke_test
 ```
 
-다섯 줄이 모두 `[OK]`면 `.env`의 `MOCK_MODE=0`으로 바꾸고 서버를 다시 켭니다. `[FAIL]`이면 터미널에 찍힌 `[HCX ERROR]` 또는 `[KAKAO ERROR]` 줄을 보고 10장 표에서 원인을 찾으세요.
+여섯 줄이 모두 `[OK]`면 `.env`의 `MOCK_MODE=0`으로 바꾸고 서버를 다시 켭니다. `[FAIL]`이면 터미널에 찍힌 `[HCX ERROR]` 또는 `[NAVER SEARCH ERROR] / [NCP MAPS ERROR]` 줄을 보고 10장 표에서 원인을 찾으세요.
 
 Swagger로 시연 흐름 따라하기 (이 순서 그대로 리허설)
 
@@ -1436,9 +1518,37 @@ async function getRecommendations(meetingId) {
 | `[HCX ERROR] ... 401` | API 키 오타 또는 만료 | 콘솔에서 키 다시 복사, 앞뒤 공백 제거 |
 | `[HCX ERROR] ... 400` 이고 responseFormat 언급 | Structured Outputs 필드명이 콘솔 문서와 다름 | 문서 예시와 `hcx_client.structured()`의 body를 비교해 이름만 수정 |
 | `[HCX ERROR] ... 429` | 호출 한도 초과 | 잠깐 기다리기, 시연 직전 반복 호출 자제 |
-| `[KAKAO ERROR] ... 401` | REST 키가 아닌 다른 키 사용 | 앱 키 중 **REST API 키** 사용 |
-| `[KAKAO ERROR] ... 403` | 카카오맵 사용 설정 OFF | 내 애플리케이션 → 카카오맵 → 사용 설정 ON |
+| `[NAVER SEARCH ERROR] 401` | 검색 API Client ID/Secret 오타 | 개발자센터 → 내 애플리케이션에서 다시 복사 |
+| `[NAVER SEARCH ERROR] 403` | 애플리케이션에 "검색" API가 추가 안 됨 | 내 애플리케이션 → API 설정 → 검색 추가 |
+| `[NCP MAPS ERROR] 401` | NCP Maps 키 오타, 또는 Geocoding/Reverse Geocoding 체크 안 함 | 콘솔 → Maps → Application 수정에서 두 API 체크 |
+| `[NCP MAPS ERROR] 404` 또는 연결 실패 | 엔드포인트 도메인이 계정 문서와 다름 | 콘솔 API 문서의 주소를 `.env`의 `NCP_MAPS_BASE`에 넣기 (예전 도메인 `https://naveropenapi.apigw.ntruss.com`) |
 | `NO_LOCATION` | 출발지 문장에서 위치를 못 찾음 | "OO역에서 출발"처럼 역 이름을 넣어 다시 입력 |
-| `NO_CANDIDATES` | 반경 안에 가게가 없음 | `radius_m`을 2000\~3000으로 늘리기 |
+| `NO_CANDIDATES` | 역 주변 검색 결과가 반경 밖이거나 모두 비선호 | `radius_m`을 2000\~3000으로 늘리기 |
+| 후보가 3\~5개뿐 | 네이버 지역 검색은 검색어당 최대 5개 | 정상. 프롬프트에서 검색어 수를 늘리거나 `sort=comment` 검색을 한 번 더 추가 |
 | 추천 결과에 `"fallback": true` | HCX 랭킹이 실패해 규칙으로 대체됨 | 터미널의 `[HCX ...]` 줄 확인, 동작은 정상 |
 | 서버 재시작 후 데이터가 없음 | `data/` 폴더가 다른 위치에 생김 | 항상 같은 폴더에서 서버 실행 |
+
+결과 화면에 네이버 지도 띄우기 (프론트, NCP Maps의 Dynamic Map 사용)
+
+```html
+<div id="map" style="width:100%;height:320px"></div>
+<script src="https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=여기에_NCP_MAPS_KEY_ID"></script>
+<script>
+  // r = POST /recommend 응답
+  function drawMap(r) {
+    const map = new naver.maps.Map("map", {
+      center: new naver.maps.LatLng(r.center.lat, r.center.lng),
+      zoom: 15,
+    });
+    r.recommendations.forEach((rec) => {
+      new naver.maps.Marker({
+        position: new naver.maps.LatLng(rec.place.lat, rec.place.lng),
+        map,
+        title: `${rec.rank}. ${rec.place.name}`,
+      });
+    });
+  }
+</script>
+```
+
+지도 스크립트 주소의 키 파라미터 이름(`ncpKeyId`)과 웹 서비스 URL 등록은 NCP 콘솔의 Maps 가이드와 한 번 대조하세요. 키는 프론트에 노출되므로 Dynamic Map에만 쓰고, 검색 API 키(Client Secret)는 절대 프론트에 넣지 않습니다.
