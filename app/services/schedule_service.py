@@ -1,9 +1,10 @@
 """1-1, 1-2, 그룹 시간 조율. AI 없이 코드로만 계산한다 (크레딧 0원)."""
 import json
+import math
 from datetime import datetime, timedelta
 
 from app import prompts
-from app.clients import hcx_client as hcx
+from app.clients import ai_client as ai
 from app.config import settings
 from app.errors import ApiError
 
@@ -58,10 +59,12 @@ def _end_time(start: str, minutes: int) -> str:
 def best_slots(meeting: dict, min_hours: float = 2, top: int = 5) -> dict:
     """가장 많은 사람이 되는 연속 시간 구간을 순위대로."""
     members = meeting["members"]
-    responded = [m for m in members if m["availability"]]
+    responded = [m for m in members if m.get("availability_submitted", bool(m["availability"]))]
     slots = all_slots(meeting)
     step = meeting["slot_minutes"]
-    need = max(1, int(min_hours * 60 // step))
+    if not math.isfinite(min_hours) or not 0 < min_hours <= 24 or not 1 <= top <= 50:
+        raise ApiError(400, "VALIDATION_ERROR", "최소 시간은 0 초과 24 이하, 결과 수는 1~50이어야 해요.")
+    need = max(1, math.ceil(min_hours * 60 / step))
 
     def find(need_slots: int) -> list:
         best = {}  # (날짜, 가능한 사람들) -> 가장 긴 구간
@@ -124,7 +127,7 @@ async def parse_availability_text(meeting: dict, text: str) -> dict:
     dates = [f"{d}({WEEKDAYS[datetime.strptime(d, '%Y-%m-%d').weekday()]})"
              for d in meeting["candidate_dates"]]
     user = json.dumps({"후보날짜": dates, "선택가능슬롯": slots, "문장": text}, ensure_ascii=False)
-    out = await hcx.structured(prompts.AVAILABILITY_SYSTEM, user,
+    out = await ai.structured(prompts.AVAILABILITY_SYSTEM, user,
                                prompts.AVAILABILITY_SCHEMA, step="parse_availability")
     avail = {d.get("date", "")[:10]: d.get("slots", []) for d in out.get("days", [])}
     return {"availability": clean_availability(meeting, avail, strict=False),

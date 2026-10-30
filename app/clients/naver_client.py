@@ -1,8 +1,8 @@
 """네이버 API 담당.
-- 지역 검색 (네이버 개발자센터 검색 API): 역·가게 이름 -> 좌표, 근처 가게 후보
+- 지역 검색 (NAVER API HUB): 역·가게 이름 -> 좌표, 근처 가게 후보
 - 지오코딩 / 리버스 지오코딩 (NCP Maps): 주소 -> 좌표, 좌표 -> 동네 이름
 네이버 지역 검색은 '반경 검색'이 없어서 "사당역 파스타"처럼 역 이름을 붙여 검색하고,
-거리는 코드로 계산해 너무 먼 곳을 걸러낸다. MOCK_MODE 에서는 샘플 데이터로 흉내낸다."""
+거리는 코드로 계산해 너무 먼 곳을 걸러낸다. MAPS_PROVIDER=mock 에서는 샘플 데이터로 흉내낸다."""
 import hashlib
 import html
 import math
@@ -14,16 +14,13 @@ import httpx
 from app.config import settings
 from app.errors import ApiError
 
-SEARCH_URL = "https://naverapihub.apigw.ntruss.com/search/v1/local"
-
-
 def haversine_km(lat1, lng1, lat2, lng2) -> float:
     """두 좌표 사이 직선거리(km)."""
     r = 6371
     p1, p2 = math.radians(lat1), math.radians(lat2)
     dp, dl = p2 - p1, math.radians(lng2 - lng1)
     a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
-    return 2 * r * math.asin(math.sqrt(a))
+    return 2 * r * math.asin(math.sqrt(min(1.0, max(0.0, a))))
 
 
 # ---------- MOCK 데이터 ----------
@@ -85,17 +82,44 @@ def _coord(value) -> float:
 def _to_place(item: dict) -> dict:
     name = _clean(item.get("title", ""))
     address = item.get("roadAddress") or item.get("address", "")
+    lat, lng = _coord(item["mapy"]), _coord(item["mapx"])
+    if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+        raise ValueError("Invalid coordinates")
     return {
         "id": hashlib.md5((name + address).encode()).hexdigest()[:10],  # 네이버 지역검색은 id가 없어서 만듦
         "name": name,
         "category": item.get("category", ""),
         "address": address,
-        "lat": _coord(item["mapy"]),
-        "lng": _coord(item["mapx"]),
+        "lat": lat,
+        "lng": lng,
         "phone": item.get("telephone", ""),
         "url": item.get("link") or f"https://map.naver.com/p/search/{quote(name)}",
         "distance_m": None,
     }
+
+
+async def _get_json(url: str, headers: dict, params: dict, service: str) -> dict:
+    """외부 오류 본문/인증 정보는 클라이언트 응답에 노출하지 않는다."""
+    try:
+        async with httpx.AsyncClient(timeout=settings.MAPS_TIMEOUT_SECONDS) as client:
+            response = await client.get(url, headers={**headers, "Accept": "application/json"}, params=params)
+        response.raise_for_status()
+    except httpx.HTTPStatusError as error:
+        raise ApiError(502, "MAP_ERROR", f"{service} 호출에 실패했어요. "
+                       f"(HTTP {error.response.status_code}) 인증·이용 설정을 확인해 주세요.") from None
+    except httpx.TimeoutException:
+        raise ApiError(502, "MAP_ERROR", f"{service} 요청 시간이 초과됐어요. (Timeout)") from None
+    except httpx.HTTPError as error:
+        # 예외 문자열에는 URL 등이 포함될 수 있으므로 타입 이름만 전달한다.
+        raise ApiError(502, "MAP_ERROR", f"{service} 네트워크 연결에 실패했어요. "
+                       f"({type(error).__name__})") from None
+    try:
+        data = response.json()
+        if not isinstance(data, dict):
+            raise ValueError("Expected object")
+        return data
+    except ValueError:
+        raise ApiError(502, "MAP_ERROR", f"{service} 응답 형식이 올바르지 않아요.") from None
 
 
 async def local_search(query: str, display: int = 5, sort: str = "random") -> list:
@@ -103,69 +127,78 @@ async def local_search(query: str, display: int = 5, sort: str = "random") -> li
     headers = {"X-NCP-APIGW-API-KEY-ID": settings.NAVER_CLIENT_ID,
            "X-NCP-APIGW-API-KEY": settings.NAVER_CLIENT_SECRET}
 
-    params = {"query": query, "display": display, "start": 1, "sort": sort}
+    params = {"query": query, "display": display, "start": 1, "sort": sort, "format": "json"}
+    data = await _get_json(settings.NAVER_SEARCH_URL, headers, params, "네이버 지역 검색")
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            res = await client.get(SEARCH_URL, headers=headers, params=params)
-    except httpx.HTTPError as e:
-        raise ApiError(502, "MAP_ERROR", f"지도 정보를 불러오지 못했어요: {e}")
-    if res.status_code != 200:
-        print(f"[NAVER SEARCH ERROR] {res.status_code} {res.text[:300]}")
-        raise ApiError(502, "MAP_ERROR", "지도 정보를 불러오지 못했어요.")
-    return [_to_place(it) for it in res.json().get("items", []) if it.get("mapx")]
+        items = data["items"]
+        if not isinstance(items, list) or not all(isinstance(it, dict) for it in items):
+            raise ValueError("Invalid items")
+        # 좌표가 없는 검색 결과는 추천 후보로 사용하지 않는다.
+        return [_to_place(it) for it in items if it.get("mapx") and it.get("mapy")]
+    except (KeyError, TypeError, ValueError, OverflowError):
+        raise ApiError(502, "MAP_ERROR", "네이버 지역 검색 응답 형식이 올바르지 않아요.") from None
 
 
 # ---------- NCP Maps (Geocoding / Reverse Geocoding) ----------
 async def _ncp_get(path: str, params: dict) -> dict:
     headers = {"x-ncp-apigw-api-key-id": settings.NCP_MAPS_KEY_ID,
                "x-ncp-apigw-api-key": settings.NCP_MAPS_KEY}
+    return await _get_json(settings.NCP_MAPS_BASE.rstrip("/") + path, headers, params, "NCP Maps")
+
+
+async def address_geocode(text: str):
+    """주소를 NCP Geocoding으로 직접 조회 (지역 검색과 별도)."""
+    data = await _ncp_get("/map-geocode/v2/geocode", {"query": text})
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            res = await client.get(settings.NCP_MAPS_BASE + path, headers=headers, params=params)
-    except httpx.HTTPError as e:
-        raise ApiError(502, "MAP_ERROR", f"지도 정보를 불러오지 못했어요: {e}")
-    if res.status_code != 200:
-        print(f"[NCP MAPS ERROR] {path} {res.status_code} {res.text[:300]}")
-        raise ApiError(502, "MAP_ERROR", "지도 정보를 불러오지 못했어요.")
-    return res.json()
+        if data["status"] != "OK" or not isinstance(data["addresses"], list):
+            raise ValueError("Geocoding failed")
+        if not data["addresses"]:
+            return None
+        address = data["addresses"][0]
+        lat, lng = float(address["y"]), float(address["x"])
+        if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+            raise ValueError("Invalid coordinates")
+        return {"text": text, "lat": lat, "lng": lng}
+    except (KeyError, TypeError, ValueError, IndexError):
+        raise ApiError(502, "MAP_ERROR", "NCP Geocoding 응답 형식이 올바르지 않아요.") from None
 
 
 async def geocode(text: str):
     """'수원역' 또는 '경기 수원시 팔달구 덕영대로 924' -> {"text","lat","lng"}. 못 찾으면 None."""
     if not text:
         return None
-    if settings.MOCK_MODE:
+    if settings.MAPS_PROVIDER == "mock":
         return _mock_geocode(text)
     # 1) 역·건물 이름은 지역 검색이 잘 찾음
     places = await local_search(text, display=1)
     if places:
         return {"text": text, "lat": places[0]["lat"], "lng": places[0]["lng"]}
     # 2) 주소 형태면 NCP 지오코딩
-    data = await _ncp_get("/map-geocode/v2/geocode", {"query": text})
-    addrs = data.get("addresses", [])
-    if not addrs:
-        return None
-    return {"text": text, "lat": float(addrs[0]["y"]), "lng": float(addrs[0]["x"])}
+    return await address_geocode(text)
 
 
 async def area_name(lat: float, lng: float):
     """좌표 -> '동작구 사당동' (리버스 지오코딩). 못 찾으면 None."""
-    if settings.MOCK_MODE:
+    if settings.MAPS_PROVIDER == "mock":
         return "샘플구 샘플동"
     data = await _ncp_get("/map-reversegeocode/v2/gc",
                           {"coords": f"{lng},{lat}", "orders": "legalcode", "output": "json"})
-    results = data.get("results", [])
-    if not results:
-        return None
-    region = results[0]["region"]
-    parts = [region.get(k, {}).get("name", "") for k in ("area2", "area3")]
-    return " ".join(p for p in parts if p) or None
+    try:
+        if data["status"]["code"] != 0 or not isinstance(data["results"], list):
+            raise ValueError("Reverse geocoding failed")
+        if not data["results"]:
+            return None
+        region = data["results"][0]["region"]
+        parts = [region.get(k, {}).get("name", "") for k in ("area2", "area3")]
+        return " ".join(p for p in parts if p) or None
+    except (KeyError, TypeError, ValueError, AttributeError, IndexError):
+        raise ApiError(502, "MAP_ERROR", "NCP Reverse Geocoding 응답 형식이 올바르지 않아요.") from None
 
 
-async def driving(start: dict, goal: dict):
+async def driving(start: dict, goal: dict, *, raise_on_error: bool = False):
     """자동차 길찾기 (NCP Directions 5). {"distance_km","minutes"} / 실패하면 None.
-    MOCK_MODE 에서는 직선거리 x1.3 을 도로 거리로, 시속 25km 로 계산한 값."""
-    if settings.MOCK_MODE:
+    MAPS_PROVIDER=mock 에서는 직선거리 x1.3 을 도로 거리로, 시속 25km 로 계산한 값."""
+    if settings.MAPS_PROVIDER == "mock":
         km = haversine_km(start["lat"], start["lng"], goal["lat"], goal["lng"]) * 1.3
         return {"distance_km": round(km, 1), "minutes": max(1, round(km / 25 * 60))}
     try:
@@ -174,19 +207,26 @@ async def driving(start: dict, goal: dict):
             "goal": f"{goal['lng']},{goal['lat']}",
             "option": "trafast",
         })
+        routes = data.get("route", {}).get("trafast") or []
+        if data.get("code") != 0 or not routes:
+            return None
+        summary = routes[0]["summary"]
+        distance, duration = float(summary["distance"]), float(summary["duration"])
+        if not (0 <= distance < math.inf and 0 <= duration < math.inf):
+            return None
+        return {"distance_km": round(distance / 1000, 1),
+                "minutes": max(1, round(duration / 60000))}
     except ApiError:
+        if raise_on_error:
+            raise
         return None
-    routes = data.get("route", {}).get("trafast") or []
-    if data.get("code") != 0 or not routes:   # 출발지와 도착지가 너무 가까우면 경로가 없음(code 1)
+    except (KeyError, TypeError, ValueError, AttributeError, IndexError, OverflowError):
         return None
-    summary = routes[0]["summary"]
-    return {"distance_km": round(summary["distance"] / 1000, 1),
-            "minutes": max(1, round(summary["duration"] / 60000))}
 
 
 async def nearest_station(lat: float, lng: float):
     """중간 좌표 근처 지하철역. {"name","search_name","lat","lng"} / 못 찾으면 None."""
-    if settings.MOCK_MODE:
+    if settings.MAPS_PROVIDER == "mock":
         return {"name": "샘플역", "search_name": "샘플역", "lat": lat, "lng": lng}
     try:
         area = await area_name(lat, lng)
@@ -208,8 +248,8 @@ async def nearest_station(lat: float, lng: float):
 async def search_places(query: str, center: dict, radius_m: int) -> list:
     """'{역이름} {검색어}' 로 검색하고, 중간지점에서 radius_m 안의 가게만 돌려준다."""
     full_query = f"{center['search_name']} {query}"
-    if settings.MOCK_MODE:
-        return _mock_search(full_query, center)
+    if settings.MAPS_PROVIDER == "mock":
+        return [p for p in _mock_search(full_query, center) if p["distance_m"] <= radius_m]
     places = await local_search(full_query, display=5)
     for p in places:
         p["distance_m"] = round(haversine_km(center["lat"], center["lng"], p["lat"], p["lng"]) * 1000)

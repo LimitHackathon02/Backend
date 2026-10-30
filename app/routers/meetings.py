@@ -1,122 +1,138 @@
-"""/api/meeting/... 주소들. 입력 받고 -> 서비스 부르고 -> 저장하고 -> 돌려준다.
-프로토타입이라 모임은 하나뿐이고 로그인·ID가 없다. 참여자는 이름으로 구분하며, 처음 보는 이름이면 자동으로 추가된다."""
+"""Dynamic group submissions -> automatic common-time and place recommendation."""
+import secrets
+from dataclasses import dataclass
 from typing import Annotated
 
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, Depends, Query
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy.orm import Session, sessionmaker
 
-from app import examples as ex
 from app import store
+from app.database import get_session
 from app.errors import ApiError
-from app.schemas import (AvailabilityReq, ConfirmReq, CreateMeetingReq, JoinReq,
-                         PreferenceReq, RecommendReq, TextReq)
-from app.services import preference_service, recommend_service, schedule_service
+from app.models import Meeting, Member
+from app.schemas import ConfirmPlaceReq, CreateMeetingReq, JoinReq, SubmissionReq, TextReq
+from app.services import preference_service, schedule_service, submission_service
 
-router = APIRouter(prefix="/api/meeting", tags=["meeting"])
+router = APIRouter(prefix="/api/meetings", tags=["meetings"])
+bearer = HTTPBearer(auto_error=False)
 
 
-# ---------- 4. 모임 ----------
+@dataclass
+class Context:
+    db: Session
+    meeting: Meeting
+    member: Member
+
+
+def context(meeting_id: str, db: Annotated[Session, Depends(get_session)],
+            credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]):
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise ApiError(401, "TOKEN_REQUIRED", "Authorization: Bearer 참여자토큰 헤더가 필요해요.")
+    meeting, member = store.authenticate(db, meeting_id, credentials.credentials)
+    return Context(db, meeting, member)
+
+
+Ctx = Annotated[Context, Depends(context)]
+DB = Annotated[Session, Depends(get_session)]
+
+
+def view(ctx):
+    return store.snapshot(ctx.meeting, host=ctx.member.is_host)
+
+
+def workflow_context(ctx):
+    # The workflow opens short independent transactions around writes, never around HTTP calls.
+    factory = sessionmaker(bind=ctx.db.get_bind(), expire_on_commit=False)
+    meeting_id, member_id, host = ctx.meeting.id, ctx.member.id, ctx.member.is_host
+    ctx.db.rollback()
+    return factory, meeting_id, member_id, host
+
+
 @router.post("", status_code=201)
-def create_meeting(req: Annotated[CreateMeetingReq, Body(openapi_examples=ex.CREATE_MEETING)]):
-    """새 모임으로 초기화. 모든 값이 선택이라 {} 만 보내도 된다."""
-    if req.time_range.start >= req.time_range.end:
-        raise ApiError(400, "VALIDATION_ERROR", "시작 시간이 끝 시간보다 빨라야 해요.")
-    if len(set(req.members)) > store.MAX_MEMBERS:
-        raise ApiError(400, "MEETING_FULL", "인원이 가득 찼어요.")
-    return store.create_meeting(req.title, req.candidate_dates, req.time_range.model_dump(),
-                                req.slot_minutes, req.members)
+def create_meeting(req: CreateMeetingReq, db: DB):
+    host, token = store.new_member(req.host_name, is_host=True)
+    meeting = Meeting(title=req.title, invite_code=secrets.token_urlsafe(24),
+                      expected_member_count=req.expected_member_count,
+                      recommendation_options=req.recommendation_options.model_dump(),
+                      candidate_dates=req.candidate_dates, time_range=req.time_range.model_dump(),
+                      slot_minutes=req.slot_minutes, members=[host])
+    db.add(meeting)
+    db.commit()
+    return {"meeting": store.snapshot(meeting, host=True), "member_id": host.id,
+            "access_token": token, "token_type": "bearer"}
 
 
-@router.post("/demo", status_code=201)
-def seed_demo():
-    """발표 전 한 번 실행: 시연용 데이터로 모임을 초기화한다 (AI 호출 없음).
-    보경은 일정·선호·출발지까지, 지민은 일정만 들어간다. 내용은 app/examples.py 의 DEMO."""
-    demo = ex.DEMO
-    meeting = store.create_meeting(demo["title"], demo["candidate_dates"], demo["time_range"],
-                                   demo["slot_minutes"], list(demo["availability"]))
-    for name, avail in demo["availability"].items():
-        store.get_member(meeting, name)["availability"] = \
-            schedule_service.clean_availability(meeting, avail)
-    for name, pref in demo["preference"].items():
-        store.get_member(meeting, name)["preference"] = dict(pref)
-    store.save()
-    return meeting
+@router.post("/{meeting_id}/members", status_code=201)
+def join_meeting(meeting_id: str, req: JoinReq, db: DB):
+    meeting = store.get_meeting(db, meeting_id, lock=True)
+    if not secrets.compare_digest(meeting.invite_code, req.invite_code):
+        raise ApiError(403, "INVALID_INVITE", "초대 코드가 올바르지 않아요.")
+    if len(meeting.members) >= meeting.expected_member_count:
+        raise ApiError(400, "MEETING_FULL", "설정한 그룹 인원이 모두 참여했어요.")
+    if any(m.name == req.name for m in meeting.members):
+        raise ApiError(409, "MEMBER_CONFLICT", "이미 사용 중인 이름이에요.")
+    member, token = store.new_member(req.name)
+    meeting.members.append(member)
+    store.invalidate(meeting)
+    store.commit(db, meeting)
+    return {"meeting": store.snapshot(meeting), "member_id": member.id,
+            "access_token": token, "token_type": "bearer"}
 
 
-@router.get("")
-def get_meeting():
-    return store.get_meeting()
+@router.get("/{meeting_id}")
+def get_meeting(ctx: Ctx):
+    return view(ctx)
 
 
-@router.post("/members", status_code=201)
-def join_meeting(req: Annotated[JoinReq, Body(openapi_examples=ex.JOIN)]):
-    meeting = store.get_meeting()
-    member = store.get_member(meeting, req.name)
-    store.save()
-    return member
+@router.put("/{meeting_id}/members/me/submission")
+async def submit_response(req: SubmissionReq, ctx: Ctx):
+    factory, meeting_id, member_id, host = workflow_context(ctx)
+    return await submission_service.submit(factory, meeting_id, member_id, req, host=host)
 
 
-# ---------- 5. 일정 ----------
-@router.put("/availability")
-def save_availability(req: Annotated[AvailabilityReq, Body(openapi_examples=ex.AVAILABILITY)]):
-    meeting = store.get_meeting()
-    availability = schedule_service.clean_availability(meeting, req.availability)
-    member = store.get_member(meeting, req.name)
-    member["availability"] = availability
-    store.save()
-    return member
+@router.post("/{meeting_id}/availability/parse")
+async def parse_availability(req: TextReq, ctx: Ctx):
+    return await schedule_service.parse_availability_text(view(ctx), req.text)
 
 
-@router.post("/availability/parse")
-async def parse_availability(req: Annotated[TextReq, Body(openapi_examples=ex.PARSE_AVAILABILITY)]):
-    return await schedule_service.parse_availability_text(store.get_meeting(), req.text)
+@router.get("/{meeting_id}/schedule")
+def get_schedule(ctx: Ctx,
+                 min_hours: Annotated[float, Query(gt=0, le=24, allow_inf_nan=False)] = 2,
+                 top: Annotated[int, Query(ge=1, le=50)] = 5):
+    return schedule_service.best_slots(view(ctx), min_hours=min_hours, top=top)
 
 
-@router.get("/schedule")
-def get_schedule(min_hours: float = 2, top: int = 5):
-    return schedule_service.best_slots(store.get_meeting(), min_hours=min_hours, top=top)
-
-
-@router.post("/schedule/confirm")
-def confirm_schedule(req: Annotated[ConfirmReq, Body(openapi_examples=ex.CONFIRM)]):
-    meeting = store.get_meeting()
-    if req.date not in meeting["candidate_dates"]:
-        raise ApiError(400, "INVALID_DATE", "열려 있는 날짜만 고를 수 있어요.")
-    meeting["confirmed"] = {"date": req.date, "start": req.start, "end": req.end}
-    meeting["status"] = "scheduled"
-    store.save()
-    return meeting
-
-
-# ---------- 6. 선호 ----------
-@router.post("/preference")
-async def save_preference(req: Annotated[PreferenceReq, Body(openapi_examples=ex.PREFERENCE)]):
-    meeting = store.get_meeting()
-    loc = req.start_location.model_dump() if req.start_location else None
-    pref, found = await preference_service.build_preference(req.text, loc)
-    member = store.get_member(meeting, req.name)
-    member["preference"] = pref
-    store.save()
-    return {"name": req.name, "preference": pref, "location_found": found}
-
-
-@router.get("/preferences/summary")
-async def preference_summary():
-    meeting = store.get_meeting()
-    prefs = [m["preference"] for m in meeting["members"] if m["preference"]]
+@router.get("/{meeting_id}/preferences/summary")
+def preference_summary(ctx: Ctx):
+    prefs = [m.preference for m in ctx.meeting.members if m.preference]
     if not prefs:
         raise ApiError(400, "NO_PREFERENCES", "먼저 원하는 조건을 적어 주세요.")
     merged = preference_service.merge_group(prefs)
-    return {"responded": len(prefs), "total": len(meeting["members"]), **merged,
-            "summary": await preference_service.group_summary(merged)}
+    return {"responded": len(prefs), "total": ctx.meeting.expected_member_count, **merged,
+            "summary": preference_service.rule_summary(merged)}
 
 
-# ---------- 7. 추천 ----------
-@router.post("/recommend")
-async def recommend(req: Annotated[RecommendReq, Body(openapi_examples=ex.RECOMMEND)]):
-    meeting = store.get_meeting()
-    people = [{"name": m["name"], "preference": m["preference"]} for m in meeting["members"]]
-    result = await recommend_service.recommend(people, req.count, req.radius_m, req.extra_text)
-    meeting["recommendations"] = result["recommendations"]
-    meeting["status"] = "recommended"
-    store.save()
-    return result
+@router.post("/{meeting_id}/recommend")
+async def retry_recommendation(ctx: Ctx):
+    factory, meeting_id, _, host = workflow_context(ctx)
+    return await submission_service.retry(factory, meeting_id, host=host)
+
+
+@router.post("/{meeting_id}/place/confirm")
+def confirm_place(req: ConfirmPlaceReq, ctx: Ctx):
+    store.require_host(ctx.member)
+    if req.revision != ctx.meeting.revision:
+        raise ApiError(409, "MEETING_CHANGED", "최신 추천 결과를 확인한 뒤 장소를 확정해 주세요.")
+    if not store.progress(ctx.meeting)["all_submitted"]:
+        raise ApiError(409, "SUBMISSIONS_INCOMPLETE", "설정한 인원 전원이 입력을 완료해야 해요.")
+    result = ctx.meeting.recommendation_result
+    if ctx.meeting.status not in {"recommended", "finalized"} or not result:
+        raise ApiError(409, "RECOMMENDATION_REQUIRED", "추천 결과가 준비된 뒤 장소를 확정해 주세요.")
+    selected = next((r for r in result["recommendations"] if r["place"]["id"] == req.place_id), None)
+    if selected is None:
+        raise ApiError(400, "INVALID_PLACE", "현재 추천 목록의 장소만 확정할 수 있어요.")
+    ctx.meeting.confirmed_place = selected["place"]
+    ctx.meeting.status = "finalized"
+    store.commit(ctx.db, ctx.meeting)
+    return view(ctx)
